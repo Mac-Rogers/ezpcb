@@ -121,12 +121,15 @@ def processSESfile(file_name):
             print(f"wire segments: {net.wires}")
             #print(len(net.wires))
             for i in range(len(net.wires)):
-                print(i)
-                print(f"wire segment {i}: {net.wires[i][0]}, {net.wires[i][1]}")
+                #print(i)
+                #print(f"wire segment {i}: {net.wires[i][0]}, {net.wires[i][1]}")
                 file.write(f"\t\t\t\t(wire\n\t\t\t\t\t(path {net.wires[i][2]} 1000\n")
                 file.write(f"\t\t\t\t\t\t{net.wires[i][0][0]} {net.wires[i][0][1]}\n")
                 file.write(f"\t\t\t\t\t\t{net.wires[i][1][0]} {net.wires[i][1][1]}\n")
                 file.write(f"\t\t\t\t\t)\n\t\t\t\t)\n")
+            
+            for i in range(len(net.vias)):
+                file.write(f"\t\t\t\t(via via0 {net.vias[i][0]} {net.vias[i][1]})\n")
 
             file.write(f"\t\t\t)\n")
 
@@ -138,6 +141,8 @@ processDSNfile("Autorouter_PCB_cs-hackathon_2_2025-08-15.dsn")
 nets[0].addWireSegment((0, 0), (100000, 100000), 1)
 nets[0].addWireSegment((100000, 100000), (200000, 100000), 2)
 nets[1].addWireSegment((0, 0), (100000, 50000), 1)
+nets[1].addVia((50000, 25000))
+nets[1].addVia((75000, 37500))
 
 processSESfile("Autorouter_PCB_cs-hackathon_2_2025-08-15.ses")
 
