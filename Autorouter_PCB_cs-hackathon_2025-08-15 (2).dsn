@@ -1,0 +1,150 @@
+(PCB ''
+  (resolution mil 1000)
+  (structure
+    (boundary(path signal 0 0.2929 -27.56 0.0001 -27.2671 0.0001 -0.2928 0.2929 0 54.3272 0 54.6201 -0.2928 54.6201 -27.2671 54.3272 -27.56 0.2929 -27.56 )
+    )
+    (via via0
+    )
+    (grid via   0.25)
+    (grid wire   0.25)
+    (grid place   0.25)
+    (rule(clear 0.6034))
+    (rule(clear 0.6034 (type default_smd)))
+    (rule(clear 0.6034 (type smd_smd)))
+    (rule(width 1.005))
+    (layer 1
+      (type signal)
+    )
+    (layer 2
+      (type signal)
+    )
+    (layer 21
+      (type signal)
+    )
+    (layer 22
+      (type signal)
+    )
+    (layer 23
+      (type signal)
+    )
+    (layer 24
+      (type signal)
+    )
+
+  )
+
+  (placement
+    (component u1
+      (place u1 0 0 front 0
+      )
+    )
+
+  )
+  (library
+    (image u1
+      (pin p60 60 31.7736 -18.01)
+      (pin p75 75 38.4666 -18.01)
+      (pin p138 138 38.0861 -9.01)
+      (pin p150 150 32.1541 -9.01)
+      (pin p189 189 5.9401 -10.175)
+      (pin p189 204 5.9401 -18.035)
+      (pin p321 321 24.0861 -9.01)
+      (pin p333 333 18.1541 -9.01)
+    )
+
+    (padstack via0
+      (shape(circle 1 2.4016))
+      (shape(circle 2 2.4016))
+      (shape(circle 21 2.4016))
+      (shape(circle 22 2.4016))
+      (shape(circle 23 2.4016))
+      (shape(circle 24 2.4016))
+    )
+
+    (padstack p60
+      (shape(polygon 1 0.01 -1.7713 -1.9685 -1.7713 1.9685 1.7717 1.9685 1.7717 -1.9685))
+    )
+    (padstack p75
+      (shape(polygon 1 0.01 -1.7714 -1.9685 -1.7714 1.9685 1.7716 1.9685 1.7716 -1.9685))
+    )
+    (padstack p138
+      (shape(polygon 1 0.01 -1.588 -1.7008 -1.588 1.7008 1.5871 1.7008 1.5871 -1.7008))
+    )
+    (padstack p150
+      (shape(polygon 1 0.01 1.588 -1.7008 1.588 1.7008 -1.5871 1.7008 -1.5871 -1.7008))
+    )
+    (padstack p189
+      (shape(circle 1 6.6 0 0))
+      (shape(circle 2 6.6 0 0))
+      (shape(circle 21 6.6 0 0))
+      (shape(circle 22 6.6 0 0))
+      (shape(circle 23 6.6 0 0))
+      (shape(circle 24 6.6 0 0))
+    )
+    (padstack p321
+      (shape(polygon 2 0.01 -1.588 1.7008 -1.588 -1.7008 1.5871 -1.7008 1.5871 1.7008))
+    )
+    (padstack p333
+      (shape(polygon 2 0.01 1.588 1.7008 1.588 -1.7008 -1.5871 -1.7008 -1.5871 1.7008))
+    )
+  )
+  (network
+    (net U1_1
+      (pins u1-189 u1-333)
+    )
+    (net LED1_1
+      (pins u1-75 u1-138)
+    )
+    (net GND
+      (pins u1-60 u1-204)
+    )
+    (net R1_1
+      (pins u1-150 u1-321)
+    )
+    (class U1_1 U1_1
+      (circuit 
+        (use_via via0)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.5984)
+      )
+    )
+    (class LED1_1 LED1_1
+      (circuit 
+        (use_via via0)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.5984)
+      )
+    )
+    (class GND GND
+      (circuit 
+        (use_via via0)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.5984)
+      )
+    )
+    (class R1_1 R1_1
+      (circuit 
+        (use_via via0)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.5984)
+      )
+    )
+
+  )
+
+   (wiring
+    (wire(path 1 1 38.467 -18.01 38.467 -14.924 )
+      (net LED1_1)
+      (type protect)
+    )
+    )
+
+)
