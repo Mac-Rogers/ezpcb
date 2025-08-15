@@ -1,7 +1,3 @@
-# ezpcb
+# EZ-PCB
 
-A PCB design project.
-
-## Getting Started
-
-This project is just getting started. More details will be added soon.
+The most legendary PCB autorouter ever invented!
