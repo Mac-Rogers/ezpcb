@@ -1,0 +1,196 @@
+(PCB ''
+  (resolution mil 1000)
+  (structure
+    (boundary(path signal 0 0.2927 -141.7319 -0.0001 -141.439 -0.0001 -0.2927 0.2927 0.0001 208.368 0.0001 208.6609 -0.2927 208.6609 -141.439 208.368 -141.7319 0.2927 -141.7319 )
+    )
+    (via via0 via1
+    )
+    (grid via   0.25)
+    (grid wire   0.25)
+    (grid place   0.25)
+    (rule(clear 0.6034))
+    (rule(clear 0.6034 (type default_smd)))
+    (rule(clear 0.6034 (type smd_smd)))
+    (rule(width 1.005))
+    (layer 1
+      (type signal)
+    )
+    (layer 2
+      (type signal)
+    )
+
+  )
+
+  (placement
+    (component u1
+      (place u1 0 0 front 0
+      )
+    )
+
+  )
+  (library
+    (image u1
+      (pin p39 39 28.2678 -80.4722)
+      (pin p39 54 56.6138 -80.4722)
+      (pin p69 69 69.0158 -104.0942)
+      (pin p69 84 15.8658 -104.0942)
+      (pin p180 180 93.5431 -112.7946)
+      (pin p195 195 131.3381 -112.7946)
+      (pin p180 210 93.5431 -128.1496)
+      (pin p195 225 131.3381 -128.1496)
+      (pin p369 369 172.4405 -35.4723)
+      (pin p369 384 172.4405 -25.4723)
+      (pin p459 459 107.5206 -90.4722)
+      (pin p474 474 117.3606 -86.7322)
+      (pin p474 489 117.3606 -94.2122)
+      (pin p540 540 92.3361 -40.4713)
+      (pin p555 555 132.5451 -30.4723)
+      (pin p555 570 132.5451 -50.4723)
+      (pin p777 777 175.4065 -120.4721)
+      (pin p789 789 169.4745 -120.4721)
+      (pin p777 849 175.4065 -60.4722)
+      (pin p789 861 169.4745 -60.4722)
+      (pin p777 921 175.4065 -80.4722)
+      (pin p789 933 169.4745 -80.4722)
+      (pin p777 993 175.4065 -100.4721)
+      (pin p789 1005 169.4745 -100.4721)
+    )
+
+    (padstack via0
+      (shape(circle 1 2.4016))
+      (shape(circle 2 2.4016))
+    )
+    (padstack via1
+      (shape(circle 1 2.4))
+      (shape(circle 2 2.4))
+    )
+
+    (padstack p39
+      (shape(circle 1 21.6535 0 0))
+      (shape(circle 2 21.6535 0 0))
+    )
+    (padstack p69
+      (shape(circle 1 11.811 0 0))
+      (shape(circle 2 11.811 0 0))
+    )
+    (padstack p180
+      (shape(polygon 1 0.01 -3.9371 1.9685 3.9369 1.9685 3.9369 -1.9685 -3.9371 -1.9685))
+    )
+    (padstack p195
+      (shape(polygon 1 0.01 -3.9369 1.9685 3.9371 1.9685 3.9371 -1.9685 -3.9369 -1.9685))
+    )
+    (padstack p369
+      (shape(circle 1 6.5 0 0))
+      (shape(circle 2 6.5 0 0))
+    )
+    (padstack p459
+      (shape(polygon 1 0.01 2.4606 1.378 2.4606 -1.378 -2.4606 -1.378 -2.4606 1.378))
+    )
+    (padstack p474
+      (shape(polygon 1 0.01 2.461 1.378 2.461 -1.378 -2.461 -1.378 -2.461 1.378))
+    )
+    (padstack p540
+      (shape(polygon 1 0.01 16.4961 20.6496 16.4961 -20.6496 -16.4961 -20.6496 -16.4961 20.6496))
+    )
+    (padstack p555
+      (shape(polygon 1 0.01 6.8973 2.9528 6.8973 -2.9528 -6.898 -2.9528 -6.898 2.9528))
+    )
+    (padstack p777
+      (shape(polygon 1 0.01 -1.588 -1.7008 -1.588 1.7008 1.5871 1.7008 1.5871 -1.7008))
+    )
+    (padstack p789
+      (shape(polygon 1 0.01 1.588 -1.7008 1.588 1.7008 -1.5871 1.7008 -1.5871 -1.7008))
+    )
+  )
+  (network
+    (net CN1_1
+      (pins u1-39 u1-180 u1-849 u1-993)
+    )
+    (net GND
+      (pins u1-54 u1-474 u1-555 u1-933)
+    )
+    (net KEY1_3
+      (pins u1-210 u1-789)
+    )
+    (net R6_1
+      (pins u1-369 u1-1005)
+    )
+    (net Q2_4
+      (pins u1-384 u1-540)
+    )
+    (net Q1_3
+      (pins u1-459 u1-570 u1-861 u1-921)
+    )
+    (net Q1_2
+      (pins u1-489 u1-777)
+    )
+    (class CN1_1 CN1_1
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class GND GND
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class KEY1_3 KEY1_3
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class R6_1 R6_1
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class Q2_4 Q2_4
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class Q1_3 Q1_3
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+    (class Q1_2 Q1_2
+      (circuit 
+        (use_via via1)
+      )
+      (rule 
+        (width 1)
+        (clearance 0.6)
+      )
+    )
+
+  )
+
+   (wiring
+    )
+
+)

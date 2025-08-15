@@ -1,0 +1,43 @@
+(session "Autorouter_PCB_cs-hackathon_2_2025-08-15.ses"
+	(routes
+		(resolution mil 1000)
+		(network_out
+			(net CN1_1
+				(wire
+					(path 1 1000
+						0 0
+						100000 100000
+					)
+				)
+				(wire
+					(path 2 1000
+						100000 100000
+						200000 100000
+					)
+				)
+                (via via0 105372 -99863
+                )
+			)
+			(net GND
+				(wire
+					(path 1 1000
+						0 0
+						100000 50000
+					)
+				)
+			)
+			(net KEY1_3
+                (via via0 125372 -99863
+                )
+			)
+			(net R6_1
+			)
+			(net Q2_4
+			)
+			(net Q1_3
+			)
+			(net Q1_2
+			)
+		)
+	)
+)
