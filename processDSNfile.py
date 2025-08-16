@@ -5,6 +5,8 @@ pads = []
 nets = []
 components = []
 
+GRID_SPACING = 1.5
+
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
         '''
@@ -24,6 +26,8 @@ class Pad:
         self.outline = outline
         self.layer = layer
         self.centre_offset = (0,0)
+
+        self.occupancy_grid_position= []
 
         # if the shape is a circle, the outline is the diameter
         # if the shape is a polygon, the outline is a path which an aperture follows
@@ -51,6 +55,30 @@ class Pad:
         self.shape = shape
         self.outline = outline
         self.layer = layer
+    
+    def getVertices(self):
+        vertices = []
+        if self.shape == "circle":
+            # For a circle, the outline is just the diameter
+            diameter = self.outline[0]
+            radius = diameter / 2
+            center = self.position
+            # Create a circle approximation with 8 points
+            for angle in range(0, 360, 45):
+                x = center[0] + radius * np.cos(np.radians(angle))
+                y = center[1] + radius * np.sin(np.radians(angle))
+                vertices.append((x, y))
+        elif self.shape == "polygon":
+            # For a polygon, the outline is a list of points
+            for i in range(0, len(self.outline), 2):
+                x = self.position[0] + self.outline[i]
+                y = self.position[1] + self.outline[i + 1]
+                vertices.append((x, y))
+        return vertices
+
+    def addOccupancyGridPosition(self, column, row):
+        self.occupancy_grid_position.append((column, row))
+
 
 class Net:
     def __init__(self, name, pads):
@@ -63,6 +91,8 @@ class Net:
         self.wires = [] # will contain tuples of coordinates for wire segments in the net, and layer number
         self.vias = []
 
+        self.occupancy_grid_position = []  # list of tuples (column, row) for occupancy grid
+
     def addWireSegment(self, start, end, layer):
         '''
         A wire segment is straight line between 2 points start:(x1, y1) and end:(x2, y2)
@@ -74,6 +104,9 @@ class Net:
 
     def getPadsInNet(self):
         return self.pads
+
+    def addOccupancyGridPosition(self, column, row):
+        self.occupancy_grid_position.append((column, row))
 
 
 class Component:
@@ -130,6 +163,12 @@ class Component:
 
     def addPad(self, pad):
         self.pads.append(pad)
+
+class GridTile:
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.objects = [] # objects can be pad object or wire object
     
 boundary = []
 
@@ -184,7 +223,7 @@ def processDSNfile(file_name):
                             shape_outline[j] = float(shape_outline[j])
 
                     if shape_type == "circle":
-                        shape_outline = shape_description[2]
+                        shape_outline = float(shape_description[2])
 
                     pad_i.addShape(shape_type, shape_outline, shape_layer)
         
@@ -293,33 +332,118 @@ def makeBoundaryAReasonableFormat(boundary):
     ys = boundary[1::2]
     width = max(xs) - min(xs)
     height = max(ys) - min(ys)
-    return ((0,0), (width * 1000, height * 1000))
+    return ((0,0), (width, height))
 
-def occupancyGrid():
-    grid_spacing = 1000 # measured in 1/1000 thou or something
+def occupancyGridPads():
+    global grid
     corners = makeBoundaryAReasonableFormat(boundary)
     print(corners)
-    number_of_cells_x = corners[1][0] // grid_spacing
-    number_of_cells_y = corners[1][1] // grid_spacing
+    number_of_cells_x = corners[1][0] // GRID_SPACING
+    number_of_cells_y = corners[1][1] // GRID_SPACING
     print(f"Number of cells: {number_of_cells_x} x {number_of_cells_y}")
+    
+    for i in range(int(number_of_cells_y)):
+        grid.append([])
+        for j in range(int(number_of_cells_x)):
+            grid[i].append(0)  # 0 means empty cell
 
     # check if pad overlaps the corner of a grid
-    
+    # if the pad.shape is a circle -> treat it as a square with side length of the circles diameter
+    # if the pad.shape is a polygon -> find the bounding box of the polygon and treat it as a rectangle
+    for pad in pads:
+        if pad.shape == "circle":
+            # treat as square
+            #diameter = pad.getDiameter()
+            diameter = pad.outline
+            print(f"diameter: {diameter}")
+            x, y = pad.getPosition()
+            x1, y1 = x - diameter/2, y - diameter/2
+            x2, y2 = x + diameter/2, y + diameter/2
+            # find grid cells
+            col1 = int(x1 // GRID_SPACING)
+            col2 = int(x2 // GRID_SPACING)
+            row1 = int(y1 // GRID_SPACING)
+            row2 = int(y2 // GRID_SPACING)
+            # mark grid cells as occupied
+            for row in range(row1, row2 + 1):
+                for col in range(col1, col2 + 1):
+                    grid[row][col] = '#'
+                    pad.addOccupancyGridPosition(col, row)
+        elif pad.shape == "polygon":
+            # find bounding box
+            x_coords, y_coords = zip(*pad.getVertices())
+            x1, y1 = min(x_coords), min(y_coords)
+            x2, y2 = max(x_coords), max(y_coords)
+            # find grid cells
+            col1 = int(x1 // GRID_SPACING)
+            col2 = int(x2 // GRID_SPACING)
+            row1 = int(-y1 // GRID_SPACING)
+            row2 = int(-y2 // GRID_SPACING)
+            for row in range(row1, row2 + 1):
+                for col in range(col1, col2 + 1):
+                    grid[row][col] = '#'
+                    pad.addOccupancyGridPosition(col, row)
+    grid.reverse()  # reverse the grid to have (0,0) at the bottom left corner
+    return grid
 
+def occupancyGridAddWireSegment(start, end, net):
+    global grid
+    x1, y1 = start
+    x2, y2 = end
+    col1 = int(x1/1000 // GRID_SPACING)
+    col2 = int(x2/1000 // GRID_SPACING)
+    row1 = int(-y1/1000 // GRID_SPACING)
+    row2 = int(-y2/1000 // GRID_SPACING)
 
+    # Bresenham's line algorithm for grid traversal
+    dx = abs(col2 - col1)
+    dy = abs(row2 - row1)
+    x, y = col1, row1
+    sx = 1 if col2 > col1 else -1
+    sy = 1 if row2 > row1 else -1
 
+    if dx > dy:
+        err = dx / 2.0
+        while x != col2:
+            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                grid[y][x] = '@'
+                net.addOccupancyGridPosition(x, y)
+            err -= dy
+            if err < 0:
+                y += sy
+                err += dx
+            x += sx
+    else:
+        err = dy / 2.0
+        while y != row2:
+            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                grid[y][x] = '@'
+                net.addOccupancyGridPosition(x, y)
+            err -= dx
+            if err < 0:
+                x += sx
+                err += dy
+            y += sy
+    # Mark the end point
+    if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+        grid[y][x] = '@'
+        net.addOccupancyGridPosition(x, y)
+
+def occupancyGridAddVia():
+    pass
+
+def printGrid():
+    for i in range(len(grid)):
+        for j in range(len(grid[i])):
+            print(grid[i][j], end=' ')
+        print()
+
+grid = []
 processDSNfile("DSN/basic1layerRoute.dsn")
 
-# occupancyGrid()
-for component in components:
-    x,y = component.position
-    # component.move(x, y-30)
-    component.rotate(90)
-
+occupancyGrid()
 veryBasicRoute()
-# nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
-
-    # print(component.position)
+nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
 
 
 processSESfile("SES/basic1layerRoute.ses")
