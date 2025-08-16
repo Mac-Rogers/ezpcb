@@ -165,10 +165,13 @@ class Component:
         self.pads.append(pad)
 
 class GridTile:
-    def __init__(self):
-        self.x = 0
-        self.y = 0
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
         self.objects = [] # objects can be pad object or wire object
+    
+    def addObject(self, object):
+        self.objects.append(object)
     
 boundary = []
 
@@ -334,8 +337,8 @@ def makeBoundaryAReasonableFormat(boundary):
     height = max(ys) - min(ys)
     return ((0,0), (width, height))
 
-def occupancyGridPads():
-    global grid
+
+def occupancyGridPads(grid_tiles):
     corners = makeBoundaryAReasonableFormat(boundary)
     print(corners)
     number_of_cells_x = corners[1][0] // GRID_SPACING
@@ -343,9 +346,9 @@ def occupancyGridPads():
     print(f"Number of cells: {number_of_cells_x} x {number_of_cells_y}")
     
     for i in range(int(number_of_cells_y)):
-        grid.append([])
+        grid_tiles.append([])
         for j in range(int(number_of_cells_x)):
-            grid[i].append(0)  # 0 means empty cell
+            grid_tiles[i].append(GridTile(j, i))  # 0 means empty cell
 
     # check if pad overlaps the corner of a grid
     # if the pad.shape is a circle -> treat it as a square with side length of the circles diameter
@@ -367,8 +370,7 @@ def occupancyGridPads():
             # mark grid cells as occupied
             for row in range(row1, row2 + 1):
                 for col in range(col1, col2 + 1):
-                    grid[row][col] = '#'
-                    pad.addOccupancyGridPosition(col, row)
+                    grid_tiles[row][col].addObject(pad)
         elif pad.shape == "polygon":
             # find bounding box
             x_coords, y_coords = zip(*pad.getVertices())
@@ -379,71 +381,91 @@ def occupancyGridPads():
             col2 = int(x2 // GRID_SPACING)
             row1 = int(-y1 // GRID_SPACING)
             row2 = int(-y2 // GRID_SPACING)
-            for row in range(row1, row2 + 1):
-                for col in range(col1, col2 + 1):
-                    grid[row][col] = '#'
-                    pad.addOccupancyGridPosition(col, row)
-    grid.reverse()  # reverse the grid to have (0,0) at the bottom left corner
-    return grid
+            for row in range(min(row1, row2), max(row1, row2) + 1):
+                for col in range(min(col1, col2), max(col1, col2) + 1):
+                    grid_tiles[row][col].addObject(pad)
+                    
+    return grid_tiles
 
-def occupancyGridAddWireSegment(start, end, net):
-    global grid
-    x1, y1 = start
-    x2, y2 = end
-    col1 = int(x1/1000 // GRID_SPACING)
-    col2 = int(x2/1000 // GRID_SPACING)
-    row1 = int(-y1/1000 // GRID_SPACING)
-    row2 = int(-y2/1000 // GRID_SPACING)
+def occupancyGridUpdateWireSegment():
+    global grid_tiles
 
-    # Bresenham's line algorithm for grid traversal
-    dx = abs(col2 - col1)
-    dy = abs(row2 - row1)
-    x, y = col1, row1
-    sx = 1 if col2 > col1 else -1
-    sy = 1 if row2 > row1 else -1
+    for net in nets:
+        for wire_segment in net.wires:
+            x1, y1 = wire_segment[0]
+            x2, y2 = wire_segment[1]
+            col1 = int(x1/1000 // GRID_SPACING)
+            col2 = int(x2/1000 // GRID_SPACING)
+            row1 = int(-y1/1000 // GRID_SPACING)
+            row2 = int(-y2/1000 // GRID_SPACING)
 
-    if dx > dy:
-        err = dx / 2.0
-        while x != col2:
-            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
-                grid[y][x] = '@'
-                net.addOccupancyGridPosition(x, y)
-            err -= dy
-            if err < 0:
-                y += sy
-                err += dx
-            x += sx
-    else:
-        err = dy / 2.0
-        while y != row2:
-            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
-                grid[y][x] = '@'
-                net.addOccupancyGridPosition(x, y)
-            err -= dx
-            if err < 0:
-                x += sx
-                err += dy
-            y += sy
-    # Mark the end point
-    if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
-        grid[y][x] = '@'
-        net.addOccupancyGridPosition(x, y)
+            # Bresenham's line algorithm for grid traversal
+            dx = abs(col2 - col1)
+            dy = abs(row2 - row1)
+            x, y = col1, row1
+            sx = 1 if col2 > col1 else -1
+            sy = 1 if row2 > row1 else -1
+
+            if dx > dy:
+                err = dx / 2.0
+                while x != col2:
+                    if 0 <= y < len(grid_tiles) and 0 <= x < len(grid_tiles[0]):
+                        grid_tiles[y][x].addObject(net)
+                        #net.addOccupancyGridPosition(x, y)
+                    err -= dy
+                    if err < 0:
+                        y += sy
+                        err += dx
+                    x += sx
+            else:
+                err = dy / 2.0
+                while y != row2:
+                    if 0 <= y < len(grid_tiles) and 0 <= x < len(grid_tiles[0]):
+                        grid_tiles[y][x].addObject(net)
+                        #net.addOccupancyGridPosition(x, y)
+                    err -= dx
+                    if err < 0:
+                        x += sx
+                        err += dy
+                    y += sy
+            # Mark the end point
+            if 0 <= y < len(grid_tiles) and 0 <= x < len(grid_tiles[0]):
+                grid_tiles[y][x].addObject(net)
+                #net.addOccupancyGridPosition(x, y)
 
 def occupancyGridAddVia():
     pass
 
 def printGrid():
-    for i in range(len(grid)):
-        for j in range(len(grid[i])):
-            print(grid[i][j], end=' ')
+    for i in range(len(grid_tiles)):
+        for j in range(len(grid_tiles[i])):
+            tile = grid_tiles[i][j]
+            char = '.'
+            for obj in tile.objects:
+                if isinstance(obj, Net):
+                    # Find the wire segment(s) in this net that pass through this tile
+                    for wire in obj.wires:
+                        if wire[2] == 1:
+                            char = '^'
+                        elif wire[2] == 2:
+                            char = 'v'
+                elif isinstance(obj, Pad):
+                    char = '@'
+            print(char, end=' ')
         print()
 
-grid = []
+grid_tiles = []
 processDSNfile("DSN/basic1layerRoute.dsn")
 
-occupancyGrid()
+occupancyGridPads(grid_tiles)
+
+nets[1].addWireSegment((0,0), (20*1000,-20*1000), 1)
+nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
+occupancyGridUpdateWireSegment()
+
+printGrid()
 veryBasicRoute()
-nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
+
 
 
 processSESfile("SES/basic1layerRoute.ses")
