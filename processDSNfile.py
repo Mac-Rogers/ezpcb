@@ -2,6 +2,7 @@ import numpy as np
 
 pads = []
 nets = []
+components = []
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -63,6 +64,25 @@ class Net:
     def getPadsInNet(self):
         return self.pads
 
+
+class Component:
+    def __init__(self, pad):
+        '''
+        pad is a Pad object that belongs to the component
+        '''
+        # component has pad
+        # component has bounding box
+        # component has clearance
+        # component has centre location
+
+        # component can be moved -> moves pads
+        # component can be rotated -> moves pads
+        self.pads = [] # list of pad objects
+        
+
+    def addPad(self, pad):
+        self.pads.append(pad)
+    
 
 
 def processDSNfile(file_name):
@@ -138,6 +158,18 @@ def processDSNfile(file_name):
             net_name = lines[i - 1].strip().split(" ")[1]
 
             nets.append(Net(net_name, pads_in_net))
+    
+    # sort pads into components based on ID
+    # if two consecutive pins have a difference in ID by < 16, they belong to the same component
+    last_pad_id = 0
+    for pad in pads:
+        if pad.getID() - last_pad_id < 16:
+            # add pad to current component
+            components.append(Component())
+        else:
+            # create new component
+            pass
+        last_pad_id = pad.getID()
 
 
 def processSESfile(file_name):
@@ -173,11 +205,8 @@ def convertCoordinates(coords):
     return (x * 1000, y * 1000)
 
 def veryBasicRoute():
-    # route the net called "LED1_1"
 
-    pads_in_net = []
     for net in nets:
-        #if net.name == "LED1_1":
         pads_in_net = net.getPadsInNet()
     
         for i in range(len(pads_in_net) - 1):
@@ -191,16 +220,9 @@ def veryBasicRoute():
             print(f"net: {net.name}, {pad1_pos} to {pad2_pos}")
             net.addWireSegment(pad1_pos, pad2_pos, 1)
 
+
 processDSNfile("DSN/basic1layerRoute.dsn")
 
 veryBasicRoute()
 
 processSESfile("SES/basic1layerRoute.ses")
-
-'''
-for pad_i in pads:
-    print(f"Pad Name: {pad_i.getName()}, ID: {pad_i.ID}, Position: {pad_i.position}, Shape: {pad_i.shape}, Outline: {pad_i.outline}, Layer: {pad_i.layer}")
-print('')
-for net in nets:
-    print(f"Net Name: {net.name}, Pins: {net.pins}")
-    '''
