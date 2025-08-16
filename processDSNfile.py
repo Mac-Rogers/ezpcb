@@ -110,6 +110,52 @@ class Net:
 
     def addOccupancyGridPosition(self, column, row):
         self.occupancy_grid_position.append((column, row))
+    
+    def getLength(self):
+        '''
+        Compute the minimal spanning tree length of all pads in this net using Prim's algorithm
+        Returns the total length of the MST
+        '''
+        if len(self.pads) <= 1:
+            return 0.0
+        
+        # Get all pad positions
+        positions = [pad.getPosition() for pad in self.pads]
+        n = len(positions)
+        
+        # Distance function (Euclidean distance)
+        def distance(pos1, pos2):
+            return math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+        
+        # Prim's algorithm
+        visited = [False] * n
+        min_edge = [float('inf')] * n
+        parent = [-1] * n
+        
+        # Start from the first pad
+        min_edge[0] = 0
+        total_length = 0.0
+        
+        for _ in range(n):
+            # Find minimum edge
+            u = -1
+            for v in range(n):
+                if not visited[v] and (u == -1 or min_edge[v] < min_edge[u]):
+                    u = v
+            
+            visited[u] = True
+            if parent[u] != -1:
+                total_length += distance(positions[u], positions[parent[u]])
+            
+            # Update minimum edges for adjacent vertices
+            for v in range(n):
+                if not visited[v]:
+                    edge_weight = distance(positions[u], positions[v])
+                    if edge_weight < min_edge[v]:
+                        min_edge[v] = edge_weight
+                        parent[v] = u
+        
+        return total_length
 
 
 class Component:
@@ -728,29 +774,88 @@ def printGrid2():
     dump_layer(2, "Bottom")
 
 
+def approximate_gradient(component, pos, nets, delta=1e-6):
+    x, y = pos
+    # Partial derivative wrt x
+    f_x1 = total_length(component, (x + delta, y), nets)
+    f_x2 = total_length(component, (x - delta, y), nets)
+    grad_x = (f_x1 - f_x2) / (2 * delta)
+    
+    
+    # Partial derivative wrt y
+    f_y1 = total_length(component, (x, y + delta), nets)
+    f_y2 = total_length(component, (x, y - delta), nets)
+    grad_y = (f_y1 - f_y2) / (2 * delta)
+    
+    return (grad_x, grad_y)
+
+def gradient_descent_move(component, nets_to_minimise, learning_rate=0.1, max_iter=500, tolerance=1e-6):
+    pos = component.getPosition()
+    print(pos)
+    for i in range(max_iter):
+        grad = approximate_gradient(component, pos, nets_to_minimise)
+        grad_magnitude = (grad[0]**2 + grad[1]**2)**0.5
+        if grad_magnitude < tolerance:
+            print("grad no good", grad)
+            break  # gradient is too small, stop
+        
+        new_pos = (pos[0] - learning_rate * grad[0], pos[1] - learning_rate * grad[1])
+        
+        current_length = total_length(component, pos, nets_to_minimise)
+        new_length = total_length(component, new_pos, nets_to_minimise)
+        
+        if new_length >= current_length:
+            # No improvement, can try reducing learning rate or stop
+            print('nah fam its coooked')
+            break
+        
+        component.move(new_pos[0], new_pos[1])
+        pos = new_pos
+        # print(f"Iteration {i+1}: Position={pos}, Connection Length={new_length}")
+    
+    return pos
+
+def total_length(component, pos, list_nets):
+    orginal_pos = component.getPosition()
+    component.move(pos[0], pos[1])
+    sum = 0
+    for net in list_nets:
+        sum += net.getLength()
+    component.move(orginal_pos[0], orginal_pos[1])
+    return sum
+
+
+def place(component):
+    nets_to_minimise = []
+    for pad in component.pads: # only for components with 2 pads
+        padx, pady = pad.getPosition()
+        for net in nets:
+            net_pads = net.getPadsInNet()
+            if pad in net_pads and net not in nets_to_minimise: # find the net of the pad
+                nets_to_minimise.append(net)
+
+    print(nets_to_minimise)
+    gradient_descent_move(component, nets_to_minimise)
+
 grid_tiles = []
 processDSNfile("DSN/basic1layerRoute.dsn")
 
-vector_list = []
-for pad in components[0].pads: # only for components with 2 pads
-    padx, pady = pad.getPosition()
-    for net in nets:
-        net_pads = net.getPadsInNet()
-        if pad in net_pads: # find the net of the pad
-           
+for i in range(20):
+    for component in components:
+        place(component)
 
-occupancyGridPads(grid_tiles)
+# occupancyGridPads(grid_tiles)
 
-nets[1].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
+# nets[1].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
 #nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
 #nets[2].addVia((20*1000,-15*1000))
-occupancyGridUpdateWireSegment()
+# occupancyGridUpdateWireSegment()
 
-printGrid()
-#veryBasicRoute()
+# printGrid()
+veryBasicRoute()
 print("a star time")
-aStar((0, 0), (70*1000, -20*1000), nets)
-printGrid2()
+# aStar((0, 0), (70*1000, -20*1000), nets)
+# printGrid2()
 
 
 
