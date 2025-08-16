@@ -1,4 +1,5 @@
 import numpy as np
+import math
 
 pads = []
 nets = []
@@ -91,14 +92,40 @@ class Component:
         self.position = (0,0)
 
     def move(self, new_x, new_y):
+        current_x, current_y = self.position
+        diff_x, diff_y = new_x - current_x, new_y - current_y
         self.position = (new_x, new_y)
         for pad in self.pads:
-            pad.setPosition()
+            pad_x, pad_y = pad.getPosition()
+            pad.setPosition(diff_x + pad_x, diff_y + pad_y)
+
+
+    def rotate(self, angle):
+        radians = math.radians(angle)
+        cos_a = math.cos(radians)
+        sin_a = math.sin(radians)
+        comp_x, comp_y = self.getPosition()
+        
+        for pad in self.pads:
+            pad_x, pad_y = pad.getPosition()
+
+            # Calculate relative position to centre
+            rel_x = pad_x - comp_x
+            rel_y = pad_y - comp_y
+
+            # Perform rotation
+            rot_x = cos_a * (comp_x - pad_x) - sin_a * (comp_x - pad_y)
+            rot_y = sin_a * (comp_x - pad_x) + cos_a * (comp_x - pad_y)
+
+
+            pad.setPosition(rot_x, rot_y)
+
+            
 
     def setCentre(self, x, y):
         self.position = (x,y)   
 
-    def getCentre(self):
+    def getPosition(self):
         return self.position
 
     def addPad(self, pad):
@@ -200,12 +227,14 @@ def processDSNfile(file_name):
     for component in components:
         xsum,ysum = 0,0
         for pad in component.pads:
-            xsum,ysum += pad.position
+            x, y = pad.getPosition()
+            xsum += x
+            ysum += y
         component.setCentre(xsum/len(component.pads), ysum/len(component.pads))
 
     # update pad centre offsets for each component
     for component in components:
-        comp_x,comp_y = component.getCentre()
+        comp_x,comp_y = component.getPosition()
         for pad in component.pads:
             pad_x, pad_y = pad.getPosition()
             pad.setOffset(comp_x - pad_x, comp_y - pad_y)
@@ -281,9 +310,16 @@ def occupancyGrid():
 
 processDSNfile("DSN/basic1layerRoute.dsn")
 
-occupancyGrid()
+# occupancyGrid()
+for component in components:
+    x,y = component.position
+    # component.move(x, y-30)
+    component.rotate(90)
+
 veryBasicRoute()
-nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
+# nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
+
+    # print(component.position)
 
 
 processSESfile("SES/basic1layerRoute.ses")
