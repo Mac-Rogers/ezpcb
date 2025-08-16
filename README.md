@@ -10,3 +10,4 @@ DSN -> SES
 - generate SES file
 - generate straight line routing
 - algo
+- 
