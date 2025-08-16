@@ -32,7 +32,9 @@ class Pad:
         # if the shape is a circle, the outline is the diameter
         # if the shape is a polygon, the outline is a path which an aperture follows
         # this path is relative to self.position
-    
+    def getId(self):
+        return self.ID
+
     def getName(self):
         return self.name
     
@@ -454,8 +456,63 @@ def printGrid():
             print(char, end=' ')
         print()
 
+def on_segment(p, q, r):
+    return (min(p[0], r) <= q <= max(p, r) and
+            min(p[1], r[1]) <= q[1] <= max(p[1], r[1]))
+
+def orientation(p, q, r):
+    val = (q[1] - p[1]) * (r - q) - (q - p) * (r[1] - q[1])
+    if val == 0:
+        return 0  # collinear
+    return 1 if val > 0 else 2
+
+
+def segments_intersect(p1, q1, p2, q2):
+    o1 = orientation(p1, q1, p2)
+    o2 = orientation(p1, q1, q2)
+    o3 = orientation(p2, q2, p1)
+    o4 = orientation(p2, q2, q1)
+
+    if o1 != o2 and o3 != o4:
+        return True
+
+    if o1 == 0 and on_segment(p1, p2, q1):
+        return True
+    if o2 == 0 and on_segment(p1, q2, q1):
+        return True
+    if o3 == 0 and on_segment(p2, p1, q2):
+        return True
+    if o4 == 0 and on_segment(p2, q1, q2):
+        return True
+
+    return False
+
+def count_intersections(vectors):
+    """
+    vectors: list of tuples, each tuple ((x1, y1), (x2, y2)) represents a vector as endpoints.
+
+    Returns the count of intersecting pairs of vectors.
+    """
+    count = 0
+    n = len(vectors)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if segments_intersect(vectors[i][0], vectors[i][1], vectors[j], vectors[j][1]):
+                count += 1
+    return count
+
+
+
 grid_tiles = []
 processDSNfile("DSN/basic1layerRoute.dsn")
+
+vector_list = []
+for pad in components[0].pads: # only for components with 2 pads
+    padx, pady = pad.getPosition()
+    for net in nets:
+        net_pads = net.getPadsInNet()
+        if pad in net_pads: # find the net of the pad
+           
 
 occupancyGridPads(grid_tiles)
 
@@ -463,7 +520,7 @@ nets[1].addWireSegment((0,0), (20*1000,-20*1000), 1)
 nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
 occupancyGridUpdateWireSegment()
 
-printGrid()
+# printGrid()
 veryBasicRoute()
 
 
