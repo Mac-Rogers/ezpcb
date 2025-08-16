@@ -762,7 +762,7 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
         cur_w = grid_tiles[y][x].a_star_weight[layer]
 
         for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),
-                       (-1,-1),(1,-1),(-1,1),(1,1)]:
+                    (-1,-1),(1,-1),(-1,1),(1,1)]:
             nx, ny = x + dx, y + dy
             if nx < 0 or ny < 0 or ny >= len(grid_tiles) or nx >= len(grid_tiles[0]):
                 continue
@@ -776,7 +776,6 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
             for obj in tile.objects:
                 obj_type, obj_layer = getBlockerType(obj)
 
-                # same net → safe
                 net_name = None
                 if obj_type == "pad":
                     for net_i in nets:
@@ -793,18 +792,31 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
                     blocked = False
                     break
 
-                # only block if object is on *this* BFS layer
                 if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
                     blocked = True
                     break
 
-            # If not blocked, assign weight
             if blocked:
-                #tile.a_star_weight[layer] = -1
                 continue
 
             tile.a_star_weight[layer] = cur_w + 1
             q.append((nx, ny, layer))
+
+        # --- NEW: try switching layer at same (x, y) ---
+        other_layer = 1 - layer
+        if grid_tiles[y][x].a_star_weight[other_layer] is None:
+            # check blockers on the other layer at this same spot
+            blocked = False
+            for obj in grid_tiles[y][x].objects:
+                obj_type, obj_layer = getBlockerType(obj)
+
+                if obj_type in ("pad", "wire") and obj_layer - 1 == other_layer:
+                    blocked = True
+                    break
+
+            if not blocked:
+                grid_tiles[y][x].a_star_weight[other_layer] = cur_w + 1
+                q.append((x, y, other_layer))
 
     print("A* fill completing... Solving...")
     print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
