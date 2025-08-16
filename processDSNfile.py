@@ -22,6 +22,7 @@ class Pad:
         self.shape = shape
         self.outline = outline
         self.layer = layer
+        self.centre_offset = (0,0)
 
         # if the shape is a circle, the outline is the diameter
         # if the shape is a polygon, the outline is a path which an aperture follows
@@ -33,8 +34,17 @@ class Pad:
     def getID(self):
         return self.ID
     
+    def setPosition(self, x, y):
+        self.position = (x, y)
+    
     def getPosition(self):
         return self.position
+
+    def setOffset(self, x, y):
+        self.centre_offset = (x, y)
+
+    def getOffset(self):
+        return self.centre_offset
 
     def addShape(self, shape, outline, layer):
         self.shape = shape
@@ -66,7 +76,7 @@ class Net:
 
 
 class Component:
-    def __init__(self, pad):
+    def __init__(self, id):
         '''
         pad is a Pad object that belongs to the component
         '''
@@ -78,7 +88,18 @@ class Component:
         # component can be moved -> moves pads
         # component can be rotated -> moves pads
         self.pads = [] # list of pad objects
-        
+        self.position = (0,0)
+
+    def move(self, new_x, new_y):
+        self.position = (new_x, new_y)
+        for pad in self.pads:
+            pad.setPosition()
+
+    def setCentre(self, x, y):
+        self.position = (x,y)   
+
+    def getCentre(self):
+        return self.position
 
     def addPad(self, pad):
         self.pads.append(pad)
@@ -162,15 +183,31 @@ def processDSNfile(file_name):
     # sort pads into components based on ID
     # if two consecutive pins have a difference in ID by < 16, they belong to the same component
     last_pad_id = 0
+    component_id_index = 0
+    current_component = Component(component_id_index)
     for pad in pads:
-        if pad.getID() - last_pad_id < 16:
-            # add pad to current component
-            components.append(Component())
-        else:
+        if pad.getID() - last_pad_id >= 16:
             # create new component
-            pass
+            component_id_index += 1
+            current_component = Component(component_id_index)
+            components.append(current_component)
+        
+        current_component.addPad(pad)        # add pad to current component
         last_pad_id = pad.getID()
 
+    # create component centre point
+    for component in components:
+        xsum,ysum = 0,0
+        for pad in component.pads:
+            xsum,ysum += pad.position
+        component.setCentre(xsum/len(component.pads), ysum/len(component.pads))
+
+    # update pad centre offsets for each component
+    for component in components:
+        comp_x,comp_y = component.getCentre()
+        for pad in component.pads:
+            pad_x, pad_y = pad.getPosition()
+            pad.setOffset(comp_x - pad_x, comp_y - pad_y)
 
 def processSESfile(file_name):
     # function to create a .ses file from the new wires and vias
