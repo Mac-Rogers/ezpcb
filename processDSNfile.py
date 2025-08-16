@@ -147,11 +147,11 @@ class Component:
             rel_y = pad_y - comp_y
 
             # Perform rotation
-            rot_x = cos_a * (comp_x - pad_x) - sin_a * (comp_x - pad_y)
-            rot_y = sin_a * (comp_x - pad_x) + cos_a * (comp_x - pad_y)
+            new_pad_x = comp_x + rel_x * cos_a - rel_y * sin_a
+            new_pad_y = comp_y + rel_x * sin_a + rel_y * cos_a
 
+            pad.setPosition(new_pad_x, new_pad_y)
 
-            pad.setPosition(rot_x, rot_y)
 
             
 
@@ -441,7 +441,9 @@ def printGrid():
 grid = []
 processDSNfile("DSN/basic1layerRoute.dsn")
 
-occupancyGrid()
+# occupancyGrid()
+x,y = components[0].getPosition()
+components[0].rotate(90)
 veryBasicRoute()
 nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
 
