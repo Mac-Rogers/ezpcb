@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import random
 from collections import deque
 
 pads = []
@@ -7,6 +8,7 @@ nets = []
 components = []
 
 GRID_SPACING = 1.5
+FILE_NAME = "test2"
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -110,7 +112,15 @@ class Net:
 
     def addOccupancyGridPosition(self, column, row):
         self.occupancy_grid_position.append((column, row))
-    
+
+    def getComponents(self):
+        ans = []
+        for pad in self.pads:
+            for component in components:
+                if pad in component.pads:
+                    ans.append(component)
+        return ans
+
     def getLength(self):
         '''
         Compute the minimal spanning tree length of all pads in this net using Prim's algorithm
@@ -172,6 +182,13 @@ class Component:
         # component can be rotated -> moves pads
         self.pads = [] # list of pad objects
         self.position = (0,0)
+        self.theta = 0
+
+    def setTheta(self, theta):
+        self.optimal_theta = theta
+
+    def getTheta(self):
+        return self.theta
 
     def move(self, new_x, new_y):
         current_x, current_y = self.position
@@ -791,7 +808,6 @@ def approximate_gradient(component, pos, nets, delta=1e-6):
 
 def gradient_descent_move(component, nets_to_minimise, learning_rate=0.1, max_iter=500, tolerance=1e-6):
     pos = component.getPosition()
-    print(pos)
     for i in range(max_iter):
         grad = approximate_gradient(component, pos, nets_to_minimise)
         grad_magnitude = (grad[0]**2 + grad[1]**2)**0.5
@@ -808,8 +824,11 @@ def gradient_descent_move(component, nets_to_minimise, learning_rate=0.1, max_it
             # No improvement, can try reducing learning rate or stop
             print('nah fam its coooked')
             break
-        
+        diff_x, diff_y = new_pos[0]-pos[0], new_pos[1]-pos[1]
         component.move(new_pos[0], new_pos[1])
+        for comp in component_cluster:
+            x,y = comp.getPosition()
+            comp.move(x+diff_x, y+diff_y)
         pos = new_pos
         # print(f"Iteration {i+1}: Position={pos}, Connection Length={new_length}")
     
@@ -828,21 +847,265 @@ def total_length(component, pos, list_nets):
 def place(component):
     nets_to_minimise = []
     for pad in component.pads: # only for components with 2 pads
-        padx, pady = pad.getPosition()
         for net in nets:
             net_pads = net.getPadsInNet()
             if pad in net_pads and net not in nets_to_minimise: # find the net of the pad
                 nets_to_minimise.append(net)
-
-    print(nets_to_minimise)
     gradient_descent_move(component, nets_to_minimise)
 
-grid_tiles = []
-processDSNfile("DSN/basic1layerRoute.dsn")
+def all_net_length():
+    sum = 0
+    for net in nets:
+        sum += net.getLength()
+    return sum
 
-for i in range(20):
-    for component in components:
-        place(component)
+def simulated_annealing(initial_temp=1000, final_temp=1, alpha=0.9, max_iter=1000, step_size=1.0):
+    """
+    components: list of components with .getPosition() and .move(x, y)
+    total_length_func: function returning total MST trace length of all nets
+    initial_temp: start temperature
+    final_temp: end temperature
+    alpha: cooling rate (0 < alpha < 1)
+    max_iter: max iterations per temperature
+    step_size: max distance to move component randomly per step
+    """
+    
+    # Initialize positions
+    positions = {comp: comp.getPosition() for comp in components}
+    current_length = all_net_length()
+    temp = initial_temp
+    
+    while temp > final_temp:
+        for _ in range(max_iter):
+            # Randomly pick a component and propose a small move
+            comp = random.choice(components)
+            old_pos = positions[comp]
+            
+            # Propose new position (small random shift)
+            dx = random.uniform(-step_size, step_size)
+            dy = random.uniform(-step_size, step_size)
+            new_pos = (old_pos[0] + dx, old_pos[1] + dy)
+            
+            # Move component to new position
+            comp.move(new_pos[0], new_pos[1])
+            
+            # Calculate new total length
+            new_length = all_net_length()
+            
+            # Calculate change in "energy" (cost)
+            delta = new_length - current_length
+            
+            # Decide whether to accept new position
+            if delta < 0:
+                # Improved placement: accept
+                positions[comp] = new_pos
+                current_length = new_length
+            else:
+                # Accept worse solution with a probability
+                prob = math.exp(-delta / temp)
+                if random.random() < prob:
+                    positions[comp] = new_pos
+                    current_length = new_length
+                else:
+                    # Revert move
+                    comp.move(old_pos[0], old_pos[1])
+                    
+        # Cool down temperature
+        temp *= alpha
+        
+        # Optionally print progress
+        print(f"Temperature: {temp:.2f}, Current total length: {current_length:.2f}")
+        
+    return positions
+
+def distance(p1, p2):
+    return math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+
+def unit_vector(p1, p2):
+    dist = distance(p1, p2)
+    if dist == 0:
+        return (0, 0)
+    return ((p2[0] - p1[0]) / dist, (p2[1] - p1[1]) / dist)
+
+def force_directed_placement(iterations=1000, k_attract=0.1, k_repel=1000, max_disp=1.0):
+    """
+    components: list of components with .getPosition() returning (x, y), and .move(x, y)
+    nets: list of nets, each net is a list of components connected
+    k_attract: constant for attractive force strength
+    k_repel: constant for repulsive force strength
+    max_disp: maximum displacement per iteration to avoid jittering
+    """
+
+    for _ in range(iterations):
+        # Initialize displacement dict for each component
+        disp = {comp: [0.0, 0.0] for comp in components}
+
+        # Calculate repulsive forces (between all pairs)
+        for i, c1 in enumerate(components):
+            p1 = c1.getPosition()
+            for j in range(i + 1, len(components)):
+                c2 = components[j]
+                p2 = c2.getPosition()
+                delta = unit_vector(p2, p1)  # repel direction from c2 to c1
+                dist = distance(p1, p2)
+                if dist == 0:
+                    dist = 0.01  # avoid division by zero
+                
+                force = k_repel / (dist * dist)  # inverse square repulsion
+                disp[c1][0] += delta[0] * force
+                disp[c1][1] += delta[1] * force
+                disp[c2][0] -= delta[0] * force
+                disp[c2][1] -= delta[1] * force
+
+        # Calculate attractive forces (along nets)
+        for net in nets:
+            net_comps = net.getComponents()  # Assume net can provide connected components
+            for i, c1 in enumerate(net_comps):
+                p1 = c1.getPosition()
+                for j in range(i + 1, len(net_comps)):
+                    c2 = net_comps[j]
+                    p2 = c2.getPosition()
+
+                    delta = unit_vector(p1, p2)  # attract direction from c1 to c2
+                    dist = distance(p1, p2)
+
+                    force = k_attract * (dist * dist)  # proportional to square distance attract
+                    disp[c1][0] += delta[0] * force
+                    disp[c1][1] += delta[1] * force
+                    disp[c2][0] -= delta[0] * force
+                    disp[c2][1] -= delta[1] * force
+
+        # Move components by displacement vector clipped to max_disp
+        for comp in components:
+            dx, dy = disp[comp]
+            disp_len = math.hypot(dx, dy)
+            if disp_len > max_disp:
+                dx = dx / disp_len * max_disp
+                dy = dy / disp_len * max_disp
+
+            old_x, old_y = comp.getPosition()
+            new_x, new_y = old_x + dx, old_y + dy
+            comp.move(new_x, new_y)
+
+def gradient_descent(iter=1):
+    for i in range(iter):
+        component_cluster = []
+        for component in components:
+            place(component)
+            component_cluster.append(component)
+
+def count_intersections():
+    """
+    Count the number of intersections between line segments.
+    Each segment is defined as ((x1, y1), (x2, y2)).
+    """
+    segments = []
+    for net in nets:  # get all vectors in netlist
+        for i in range(len(net.pads) - 1):
+            segments.append((net.pads[i].getPosition(), net.pads[i+1].getPosition()))
+    
+    def orientation(p, q, r):
+        val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+        if val == 0:
+            return 0
+        return 1 if val > 0 else 2
+
+    def on_segment(p, q, r):
+        """Check if point q lies on segment pr"""
+        return (min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and
+                min(p[1], r[1]) <= q[1] <= max(p[1], r[1]))
+
+    def segments_intersect(s1, s2):
+        """Check if segments s1 and s2 intersect"""
+        p1, q1 = s1
+        p2, q2 = s2
+
+        o1 = orientation(p1, q1, p2)
+        o2 = orientation(p1, q1, q2)
+        o3 = orientation(p2, q2, p1)
+        o4 = orientation(p2, q2, q1)
+
+        # General case
+        if o1 != o2 and o3 != o4:
+            return True
+
+        # Special cases: collinear points
+        if o1 == 0 and on_segment(p1, p2, q1): return True
+        if o2 == 0 and on_segment(p1, q2, q1): return True
+        if o3 == 0 and on_segment(p2, p1, q2): return True
+        if o4 == 0 and on_segment(p2, q1, q2): return True
+
+        return False
+
+    n = len(segments)
+    count = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            if segments_intersect(segments[i], segments[j]):
+                count += 1
+    return count
+
+def optimise_rotation():
+    rotates = [0, 90, 180, 270]
+    if len(components) < 10:  # O(n!) Joel would be ashamed :(
+        min_intersects = math.inf
+        best_rotations = {}
+        
+        # Store original positions to restore later
+        original_positions = {}
+        for component in components:
+            original_positions[component] = [pad.getPosition() for pad in component.pads]
+        
+        # Generate all possible rotation combinations
+        from itertools import product
+        
+        for rotation_combo in product(rotates, repeat=len(components)):
+            # Apply rotations to all components
+            for i, component in enumerate(components):
+                # Reset to original position first
+                for j, pad in enumerate(component.pads):
+                    pad.setPosition(*original_positions[component][j])
+                # Apply rotation
+                component.rotate(rotation_combo[i])
+            
+            # Calculate intersections for this combination
+            
+            
+            count = count_intersections()
+            
+            if count < min_intersects:
+                min_intersects = count
+                best_rotations = {component: rotation_combo[i] for i, component in enumerate(components)}
+                
+                # If we found zero intersections, we can stop
+                if count == 0:
+                    print("Found zero intersections! Stopping early.")
+                    break
+        
+        # Apply the best rotation combination
+        for component in components:
+            # Reset to original position first
+            for j, pad in enumerate(component.pads):
+                pad.setPosition(*original_positions[component][j])
+            # Apply best rotation
+            best_theta = best_rotations[component]
+            component.rotate(best_theta)
+            component.setTheta(best_theta)
+        
+        print(f"Final result: {min_intersects} intersections")
+    else:
+        print(f"Too many components ({len(components)}) for exhaustive search")
+
+
+grid_tiles = []
+processDSNfile(f"DSN/{FILE_NAME}.dsn")
+
+# components[1].rotate(180)
+optimise_rotation()
+# simulated_annealing()
+# force_directed_placement()
+# gradient_descent()
+
 
 # occupancyGridPads(grid_tiles)
 
@@ -853,10 +1116,9 @@ for i in range(20):
 
 # printGrid()
 veryBasicRoute()
-print("a star time")
 # aStar((0, 0), (70*1000, -20*1000), nets)
 # printGrid2()
 
 
 
-processSESfile("SES/basic1layerRoute.ses")
+processSESfile(f"SES/{FILE_NAME}.ses")
