@@ -1,0 +1,39 @@
+(session "SES/basic1layerRoute.ses"
+	(routes
+		(resolution mil 1000)
+		(network_out
+			(net GND
+				(wire
+					(path 1 1000
+						31774.100000000002 -18010.0
+						5940.1 -18035.0
+					)
+				)
+			)
+			(net LED1_1
+				(wire
+					(path 1 1000
+						53654.1 -18510.0
+						38467.1 -18010.0
+					)
+				)
+			)
+			(net R1_1
+				(wire
+					(path 1 1000
+						59586.1 -18510.0
+						59586.1 -8510.0
+					)
+				)
+			)
+			(net U1_1
+				(wire
+					(path 1 1000
+						53654.1 -8510.0
+						5940.1 -10175.0
+					)
+				)
+			)
+		)
+	)
+)

@@ -4,13 +4,13 @@
 		(network_out
 			(net CN1_1
 				(wire
-					(path 1 1000
+					(path 1 50
 						0 0
 						100000 100000
 					)
 				)
 				(wire
-					(path 2 1000
+					(path 2 50
 						100000 100000
 						200000 100000
 					)
