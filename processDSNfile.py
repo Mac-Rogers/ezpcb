@@ -476,7 +476,7 @@ def veryBasicRoute():
 
 
 
-def aStar(start, end, nets):
+def aStar(start, end, nets, start_layer, end_layer):
     """
     start,end in mils (x,y). Fills BOTH layers' weights:
       grid_tiles[y][x].a_star_weight[1] -> Top
@@ -615,6 +615,10 @@ def aStar(start, end, nets):
     bfs_layer(1)  # Top
     bfs_layer(2)  # Bottom
 
+    # solve the maze
+    print(ex, ey, grid_tiles[ey][ex].a_star_weight)
+
+    
 
 def printGrid2():
     """Print Top (1) and Bottom (2) layers once."""
@@ -665,67 +669,7 @@ def printGrid2():
 
     dump(1, "Top")
     dump(2, "Bottom")
-    """
-    Print Top (1) and Bottom (2) layers. 
-      - blocked -> "##"
-      - None (unvisited) -> ".."
-      - else -> 2-digit weight
-    """
-    if not grid_tiles or not grid_tiles[0]:
-        print("(empty grid)")
-        return
-
-    H = len(grid_tiles)
-    W = len(grid_tiles[0])
-
-    def obj_kind(o):
-        k = getattr(o, "kind", None)
-        if k: return str(k).lower()
-        cname = o.__class__.__name__.lower()
-        if "via" in cname: return "via"
-        if "pad" in cname: return "pad"
-        if "wire" in cname or "net" in cname: return "wire"
-        return "unknown"
-
-    def obj_layer_id(o):
-        lay = getattr(o, "layer", None)
-        if lay is None:
-            return None
-        if isinstance(lay, int):
-            return 1 if lay == 1 else (2 if lay == 2 else None)
-        s = str(lay).lower()
-        if s.startswith("t"): return 1
-        if s.startswith("b"): return 2
-        if s == "1": return 1
-        if s == "2": return 2
-        return None
-
-    def is_blocked(x, y, layer_id):
-        for o in grid_tiles[y][x].objects:
-            k = obj_kind(o)
-            if k == "via":
-                return True
-            if k in ("pad", "wire") and obj_layer_id(o) == layer_id:
-                return True
-        return False
-
-    def dump_layer(layer_id, title):
-        print(f"\n=== {title} (layer {layer_id}) ===")
-        for y in (range(H)):  # top row first
-            row_str = []
-            for x in range(W):
-                if is_blocked(x, y, layer_id):
-                    row_str.append("##")
-                else:
-                    w = None
-                    ws = grid_tiles[y][x].a_star_weight
-                    if ws and len(ws) > layer_id:
-                        w = ws[layer_id]
-                    row_str.append(".." if w is None else f"{w:02d}")
-            print(" ".join(row_str))
-
-    dump_layer(1, "Top")
-    dump_layer(2, "Bottom")
+    
 
 
 grid_tiles = []
@@ -737,6 +681,7 @@ for pad in components[0].pads: # only for components with 2 pads
     for net in nets:
         net_pads = net.getPadsInNet()
         if pad in net_pads: # find the net of the pad
+            pass
            
 
 occupancyGridPads(grid_tiles)
@@ -749,7 +694,7 @@ occupancyGridUpdateWireSegment()
 printGrid()
 #veryBasicRoute()
 print("a star time")
-aStar((0, 0), (70*1000, -20*1000), nets)
+aStar((5*1000, 10*1000), (70*1000, -20*1000), nets, 1, 2)
 printGrid2()
 
 
