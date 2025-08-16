@@ -33,7 +33,9 @@ class Pad:
         # if the shape is a circle, the outline is the diameter
         # if the shape is a polygon, the outline is a path which an aperture follows
         # this path is relative to self.position
-    
+    def getId(self):
+        return self.ID
+
     def getName(self):
         return self.name
     
@@ -728,6 +730,14 @@ def printGrid2():
 
 grid_tiles = []
 processDSNfile("DSN/basic1layerRoute.dsn")
+
+vector_list = []
+for pad in components[0].pads: # only for components with 2 pads
+    padx, pady = pad.getPosition()
+    for net in nets:
+        net_pads = net.getPadsInNet()
+        if pad in net_pads: # find the net of the pad
+           
 
 occupancyGridPads(grid_tiles)
 
