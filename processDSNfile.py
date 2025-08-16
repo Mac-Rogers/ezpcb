@@ -742,114 +742,70 @@ def getBlockerType(obj):
 
 
 def aStar2(start, end, start_layer, end_layer, net, nets):
+ 
     sx = int(start[0] / 1000 // GRID_SPACING)
     sy = int(-start[1] / 1000 // GRID_SPACING)
     ex = int(end[0] / 1000 // GRID_SPACING)
     ey = int(-end[1] / 1000 // GRID_SPACING)
     print("start,end (cells):", (sx, sy), (ex, ey))
 
-    current_layer = [(sx, sy)]
-    next_layer = []
+    q = deque()
+    # initialise start cell
+    #grid_tiles[sy][sx].a_star_weight[start_layer - 1] = 0
+    #q.append((sx, sy, start_layer - 1))
+    for layer in (0, 1):
+        grid_tiles[sy][sx].a_star_weight[layer] = 0
+        q.append((sx, sy, layer))
 
-    # set start weights
-    grid_tiles[sy][sx].a_star_weight[0] = 0
-    grid_tiles[sy][sx].a_star_weight[1] = 0
+    while q:
+        x, y, layer = q.popleft()
+        cur_w = grid_tiles[y][x].a_star_weight[layer]
 
-    print("PLEASE")
-    print(grid_tiles[sy][sx].objects)
-    print(grid_tiles[sy][sx].objects[0].ID)
+        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),
+                       (-1,-1),(1,-1),(-1,1),(1,1)]:
+            nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or ny >= len(grid_tiles) or nx >= len(grid_tiles[0]):
+                continue
 
-    current_weight = 0
-    for _ in range(len(grid_tiles) * len(grid_tiles[0])):
-        for x, y in current_layer:
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                           (-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                nx, ny = x + dx, y + dy
-                if ny < 0 or ny >= len(grid_tiles) or nx < 0 or nx >= len(grid_tiles[0]):
-                    continue
+            tile = grid_tiles[ny][nx]
+            if tile.a_star_weight[layer] is not None:
+                continue  # already visited
 
-                objects = grid_tiles[ny][nx].objects
+            # --- blocker check ---
+            blocked = False
+            for obj in tile.objects:
+                obj_type, obj_layer = getBlockerType(obj)
 
-                # if haven't checked the top
-                if grid_tiles[ny][nx].a_star_weight[0] is None:
+                # same net → safe
+                net_name = None
+                if obj_type == "pad":
+                    for net_i in nets:
+                        if obj in net_i.getPadsInNet():
+                            net_name = net_i.name
+                            break
+                elif obj_type == "wire":
+                    for net_i in nets:
+                        if obj in net_i.getWiresInNet():
+                            net_name = net_i.name
+                            break
+
+                if net_name == net.name:
                     blocked = False
-                    for obj in objects:
-                        obj_type, layer = getBlockerType(obj)
+                    break
 
+                # only block if object is on *this* BFS layer
+                if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
+                    blocked = True
+                    break
 
-                        # find the net associated with obj
-                        net_name = None
-                        if obj_type == "pad":
-                            # search through nets to find the net containing this pad
-                            for net_i in nets:
-                                #print(obj, net.getPadsInNet())
-                                if obj in net_i.getPadsInNet():
-                                    net_name = net_i.name
-                                    break
-                        elif obj_type == "wire":
-                            # search through nets to find the net containing this wire
-                            for net_i in nets:
-                                if obj in net_i.getWiresInNet():
-                                    net_name = net_i.name
-                                    break
-                        #print("Net for", obj, "is", net_name, "at x", nx, "y", ny)
+            # If not blocked, assign weight
+            if blocked:
+                #tile.a_star_weight[layer] = -1
+                continue
 
-                        #print(net_name, net.name)
-                        if net_name == net.name:
-                            #print(f"ignoring net {net_name}")
-                            # this object is in the same net as the wire we're routing
-                            # don't block on this pad or wire
-                            blocked = False
-                            break
+            tile.a_star_weight[layer] = cur_w + 1
+            q.append((nx, ny, layer))
 
-                        elif (obj_type == "pad" and layer == 1) or (obj_type == "wire" and layer == 1):
-                            blocked = True
-                            #print("Blocking on", obj, "net", net_name, "tile net", net.name, "position", (nx, ny))
-                            break
-                    if blocked:
-                        grid_tiles[ny][nx].a_star_weight[0] = -1  # 🚩 mark as permanently blocked
-                    else:
-                        grid_tiles[ny][nx].a_star_weight[0] = current_weight + 1
-                        next_layer.append((nx, ny))
-
-                # Bottom layer (2)
-                if grid_tiles[ny][nx].a_star_weight[1] is None:
-                    blocked = False
-                    for obj in objects:
-                        obj_type, layer = getBlockerType(obj)
-
-                        # find the net associated with obj
-                        net_name = None
-                        if obj_type == "pad":
-                            for net_i in nets:
-                                if obj in net_i.getPadsInNet():
-                                    net_name = net_i.name
-                                    break
-                        elif obj_type == "wire":
-                            for net_i in nets:
-                                if obj in net_i.getWiresInNet():
-                                    net_name = net_i.name
-                                    break
-
-                        if net_name == net.name:
-                            blocked = False
-                            break
-
-                        elif (obj_type == "pad" and layer == 2) or (obj_type == "wire" and layer == 2):
-                            blocked = True
-                            break
-
-                    if blocked:
-                        grid_tiles[ny][nx].a_star_weight[1] = -1
-                    else:
-                        grid_tiles[ny][nx].a_star_weight[1] = current_weight + 1
-                        next_layer.append((nx, ny))
-
-        current_weight += 1
-        if not next_layer:
-            break
-        current_layer, next_layer = next_layer, []
-    
     print("A* fill completing... Solving...")
     print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
     # start at ex, ey
