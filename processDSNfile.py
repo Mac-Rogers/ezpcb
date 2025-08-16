@@ -93,7 +93,6 @@ class Net:
         self.pads = pads
         self.wires = [] # will contain tuples of coordinates for wire segments in the net, and layer number
         self.vias = []
-
         self.occupancy_grid_position = []  # list of tuples (column, row) for occupancy grid
 
     def addWireSegment(self, start, end, layer):
@@ -172,7 +171,7 @@ class GridTile:
         self.x = x
         self.y = y
         self.objects = [] # objects can be pad object or wire object or via object
-        self.a_star_weight = [] # 2 element array for top and bottom layer
+        self.a_star_weight = [None, None] # 2 element array for top and bottom layer
     
     def addObject(self, object):
         self.objects.append(object)
@@ -475,19 +474,13 @@ def veryBasicRoute():
             net.addWireSegment(pad1_pos, pad2_pos, 1)
 
 
-
-def aStar(start, end, nets, start_layer, end_layer):
+def aStar(start, end, nets, current_net):
     """
-    start,end in mils (x,y). Fills BOTH layers' weights:
-      grid_tiles[y][x].a_star_weight[1] -> Top
-      grid_tiles[y][x].a_star_weight[2] -> Bottom
-    Blocks:
-      - Vias from nets: both layers
-      - Wires from nets: their own layer
-      - Pads already attached to tiles: their own layer
-    Diagonals allowed. Start = 1 on both layers (even if blocked).
+    One call: fills BOTH layers' weights in grid_tiles[y][x].a_star_weight[1/2].
+    Blocks everything except features belonging to current_net.
+    Start cell is always allowed.
     """
-    # --- mils -> grid cells (your convention) ---
+    # --- mils -> cell coords ---
     sx = int(start[0] / 1000 // GRID_SPACING)
     sy = int(-start[1] / 1000 // GRID_SPACING)
     ex = int(end[0]   / 1000 // GRID_SPACING)
@@ -497,19 +490,16 @@ def aStar(start, end, nets, start_layer, end_layer):
     if not grid_tiles or not grid_tiles[0]:
         return
 
-    H = len(grid_tiles)
-    W = len(grid_tiles[0])
-
+    H = len(grid_tiles); W = len(grid_tiles[0])
     def in_bounds(x, y): return 0 <= x < W and 0 <= y < H
+    if not in_bounds(sx, sy): return
 
     # init weights (index 0 unused; 1=Top, 2=Bottom)
     for y in range(H):
         for x in range(W):
             grid_tiles[y][x].a_star_weight = [None, None, None]
 
-    # ---- build blocked sets from nets (wires & vias) ----
-    blocked = {1: set(), 2: set()}  # per-layer sets of (x,y)
-
+    # --- helpers ---
     def to_cell(pt):
         return (int(pt[0] / 1000 // GRID_SPACING),
                 int(-pt[1] / 1000 // GRID_SPACING))
@@ -517,8 +507,8 @@ def aStar(start, end, nets, start_layer, end_layer):
     def bresenham_cells(c1, c2):
         x1, y1 = c1; x2, y2 = c2
         dx = abs(x2 - x1); dy = abs(y2 - y1)
-        sx = 1 if x2 >= x1 else -1
-        sy = 1 if y2 >= y1 else -1
+        sxn = 1 if x2 >= x1 else -1
+        syn = 1 if y2 >= y1 else -1
         x, y = x1, y1
         cells = []
         if dx >= dy:
@@ -527,38 +517,19 @@ def aStar(start, end, nets, start_layer, end_layer):
                 cells.append((x, y))
                 err -= dy
                 if err < 0:
-                    y += sy
-                    err += dx
-                x += sx
-            cells.append((x2, y2))
+                    y += syn; err += dx
+                x += sxn
         else:
             err = dy // 2
             while y != y2:
                 cells.append((x, y))
                 err -= dx
                 if err < 0:
-                    x += sx
-                    err += dy
-                y += sy
-            cells.append((x2, y2))
+                    x += sxn; err += dy
+                y += syn
+        cells.append((x2, y2))
         return cells
 
-    # wires
-    for net in nets:
-        for (p1, p2, layer_id) in net.wires:
-            layer_id = 1 if layer_id == 1 else 2  # normalize
-            c1 = to_cell(p1); c2 = to_cell(p2)
-            for (cx, cy) in bresenham_cells(c1, c2):
-                if in_bounds(cx, cy):
-                    blocked[layer_id].add((cx, cy))
-        # vias: assume net.vias are mils (x,y); block both layers
-        for pos in net.vias:
-            cx, cy = to_cell(pos)
-            if in_bounds(cx, cy):
-                blocked[1].add((cx, cy))
-                blocked[2].add((cx, cy))
-
-    # pads already on tiles: block their own layer
     def obj_kind(o):
         k = getattr(o, "kind", None)
         if k: return str(k).lower()
@@ -577,29 +548,75 @@ def aStar(start, end, nets, start_layer, end_layer):
         if s.startswith("b") or s == "2": return 2
         return None
 
+    # ---- SAME-NET membership checks (robust) ----
+    current_pads_set = set(getattr(current_net, "pads", []))  # identity match
+    current_pad_names = {getattr(p, "name", None) for p in current_pads_set if hasattr(p, "name")}
+    current_net_via_cells = set(to_cell(v) for v in getattr(current_net, "vias", []))
+
+    def is_same_net_pad(o):
+        if o in current_pads_set: return True
+        if hasattr(o, "net") and (o.net is current_net): return True
+        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
+        if hasattr(o, "name") and (o.name in current_pad_names): return True
+        return False
+
+    def is_same_net_wire(o):
+        if hasattr(o, "net") and (o.net is current_net): return True
+        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
+        return False
+
+    # ---- Build blocked sets from OTHER nets only ----
+    blocked = {1: set(), 2: set()}
+
+    for net in nets:
+        if net is current_net:
+            continue
+        for (p1, p2, layer_id) in net.wires:
+            lid = 1 if layer_id == 1 else 2
+            c1, c2 = to_cell(p1), to_cell(p2)
+            for cx, cy in bresenham_cells(c1, c2):
+                if in_bounds(cx, cy):
+                    blocked[lid].add((cx, cy))
+        for pos in net.vias:
+            cx, cy = to_cell(pos)
+            if in_bounds(cx, cy):
+                blocked[1].add((cx, cy))
+                blocked[2].add((cx, cy))
+
+    # ---- Also add tile.objects, but skip same-net features ----
     for y in range(H):
         for x in range(W):
             for o in grid_tiles[y][x].objects:
                 k = obj_kind(o)
                 if k == "via":
+                    # allow current net vias by exact cell match
+                    if (x, y) in current_net_via_cells:
+                        continue
                     blocked[1].add((x, y)); blocked[2].add((x, y))
                 elif k == "pad":
+                    if is_same_net_pad(o):  # NEW: allow same-net pads
+                        continue
                     lid = obj_layer_id(o)
                     if lid in (1, 2): blocked[lid].add((x, y))
                 elif k == "wire":
+                    if is_same_net_wire(o):  # NEW: allow same-net wires
+                        continue
                     lid = obj_layer_id(o)
                     if lid in (1, 2): blocked[lid].add((x, y))
 
-    def is_blocked(x, y, lid): return (x, y) in blocked[lid]
+    # --- block check with explicit start-cell unblock ---
+    def is_blocked(x, y, lid):
+        if x == sx and y == sy:
+            return False          # NEW: never block the start cell
+        return (x, y) in blocked[lid]
 
-    # ---- BFS fill per layer (diagonals allowed) ----
+    # ---- BFS per layer (diagonals allowed) ----
     nbrs = [(-1,-1),(0,-1),(1,-1),
             (-1, 0),        (1, 0),
             (-1, 1),(0, 1),(1, 1)]
 
     def bfs_layer(layer_id):
-        if not in_bounds(sx, sy): return
-        grid_tiles[sy][sx].a_star_weight[layer_id] = 1  # seed even if blocked
+        grid_tiles[sy][sx].a_star_weight[layer_id] = 1
         q = deque([(sx, sy)])
         while q:
             x, y = q.popleft()
@@ -615,21 +632,18 @@ def aStar(start, end, nets, start_layer, end_layer):
     bfs_layer(1)  # Top
     bfs_layer(2)  # Bottom
 
-    # solve the maze
-    print(ex, ey, grid_tiles[ey][ex].a_star_weight)
+    print(f"end cell weight: {grid_tiles[ey][ex].a_star_weight[1]}, {grid_tiles[ey][ex].a_star_weight[2]}")
 
-    
-
-def printGrid2():
-    """Print Top (1) and Bottom (2) layers once."""
+def printGrid2(current_net=None):
+    """
+    Single print: shows Top(1) and Bottom(2).
+    Same-net pads/wires/vias are shown as passable (not "##") to match routing logic.
+    """
     if not grid_tiles or not grid_tiles[0]:
         print("(empty grid)"); return
     H = len(grid_tiles); W = len(grid_tiles[0])
 
-    # reuse block check for display (derive from tile.objects only; wires from nets
-    # are already accounted for by aStar into the weights; showing blocks as '##'
-    # based on objects makes pads/vias obvious; cells blocked by net wires will show
-    # as '..' unless you also attach wire-objects to tiles)
+    # same helpers as above (kept inline to stay "mostly in one function" style)
     def obj_kind(o):
         k = getattr(o, "kind", None)
         if k: return str(k).lower()
@@ -646,12 +660,47 @@ def printGrid2():
         if s.startswith("t") or s == "1": return 1
         if s.startswith("b") or s == "2": return 2
         return None
-    def is_blocked_by_objects(x, y, lid):
+
+    current_pads_set = set(getattr(current_net, "pads", [])) if current_net else set()
+    current_pad_names = {getattr(p, "name", None) for p in current_pads_set if hasattr(p, "name")}
+    current_net_via_cells = set()
+    if current_net:
+        for v in getattr(current_net, "vias", []):
+            cx = int(v[0] / 1000 // GRID_SPACING)
+            cy = int(-v[1] / 1000 // GRID_SPACING)
+            current_net_via_cells.add((cx, cy))
+
+    def is_same_net_pad(o):
+        if not current_net: return False
+        if o in current_pads_set: return True
+        if hasattr(o, "net") and (o.net is current_net): return True
+        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
+        if hasattr(o, "name") and (o.name in current_pad_names): return True
+        return False
+    def is_same_net_wire(o):
+        if not current_net: return False
+        if hasattr(o, "net") and (o.net is current_net): return True
+        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
+        return False
+
+    def is_blocked_visual(x, y, lid):
+        # visualize as blocked unless same-net feature
         for o in grid_tiles[y][x].objects:
             k = obj_kind(o)
-            if k == "via": return True
-            if k in ("pad", "wire") and obj_layer_id(o) == lid:
+            if k == "via":
+                if (x, y) in current_net_via_cells:  # let own via show as passable
+                    continue
                 return True
+            if k == "pad":
+                if is_same_net_pad(o):  # show own pad as passable
+                    continue
+                if obj_layer_id(o) == lid:
+                    return True
+            if k == "wire":
+                if is_same_net_wire(o):  # show own wire as passable
+                    continue
+                if obj_layer_id(o) == lid:
+                    return True
         return False
 
     def dump(lid, title):
@@ -659,7 +708,7 @@ def printGrid2():
         for y in (range(H)):
             row = []
             for x in range(W):
-                if is_blocked_by_objects(x, y, lid):
+                if is_blocked_visual(x, y, lid):
                     row.append("##")
                 else:
                     ws = grid_tiles[y][x].a_star_weight
@@ -670,6 +719,100 @@ def printGrid2():
     dump(1, "Top")
     dump(2, "Bottom")
     
+
+
+
+def getBlockerType(obj):
+    # wires encoded as (start, end, layer)
+    if isinstance(obj, tuple) and len(obj) == 3:
+        return "wire", int(obj[2])
+
+    if isinstance(obj, Pad):
+        return "pad", int(obj.layer)
+
+    return "unknown", None
+
+
+def aStar2(start, end, start_layer, end_layer, net, nets):
+    sx = int(start[0] / 1000 // GRID_SPACING)
+    sy = int(-start[1] / 1000 // GRID_SPACING)
+    ex = int(end[0] / 1000 // GRID_SPACING)
+    ey = int(-end[1] / 1000 // GRID_SPACING)
+    print("start,end (cells):", (sx, sy), (ex, ey))
+
+    current_layer = [(sx, sy)]
+    next_layer = []
+
+    # set start weights
+    grid_tiles[sy][sx].a_star_weight[0] = 0
+    grid_tiles[sy][sx].a_star_weight[1] = 0
+
+    current_weight = 0
+    for _ in range(len(grid_tiles) * len(grid_tiles[0])):
+        for x, y in current_layer:
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                           (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                nx, ny = x + dx, y + dy
+                if ny < 0 or ny >= len(grid_tiles) or nx < 0 or nx >= len(grid_tiles[0]):
+                    continue
+
+                objects = grid_tiles[ny][nx].objects
+
+                if grid_tiles[ny][nx].a_star_weight[0] is None:
+                    blocked = False
+                    for obj in objects:
+                        obj_type, layer = getBlockerType(obj)
+                        # get the net name:
+                        if obj_type == "wire":
+                            
+
+                        if (obj_type == "pad" and layer % 20 == 1) or (obj_type == "wire" and layer == 1):
+                            # print("Blocking at (", nx, ny, ") on layer top because of", obj_type, layer)
+                            blocked = True
+                            break
+                    if blocked:
+                        grid_tiles[ny][nx].a_star_weight[0] = -1  # 🚩 mark as permanently blocked
+                    else:
+                        grid_tiles[ny][nx].a_star_weight[0] = current_weight + 1
+                        next_layer.append((nx, ny))
+
+                # Bottom layer (2)
+                if grid_tiles[ny][nx].a_star_weight[1] is None:
+                    blocked = False
+                    for obj in objects:
+                        obj_type, layer = getBlockerType(obj)
+                        if (obj_type == "pad" and layer % 20 == 2) or (obj_type == "wire" and layer == 2):
+                            # print("Blocking at (", nx, ny, ") on layer bottom because of", obj_type, layer)
+                            blocked = True
+                            break
+                    if blocked:
+                        grid_tiles[ny][nx].a_star_weight[1] = -1
+                    else:
+                        grid_tiles[ny][nx].a_star_weight[1] = current_weight + 1
+                        next_layer.append((nx, ny))
+
+        current_weight += 1
+        if not next_layer:
+            break
+        current_layer, next_layer = next_layer, []
+
+
+
+def printGrid3():
+    print("Top layer:")
+    for i in range(len(grid_tiles)):
+        for j in range(len(grid_tiles[i])):
+            w = grid_tiles[i][j].a_star_weight[0]
+            print(f"{w:02d}" if w is not None else "@@", end=" ")
+        print("")
+    print("")
+
+    print("Bottom layer:")
+    for i in range(len(grid_tiles)):
+        for j in range(len(grid_tiles[i])):
+            w = grid_tiles[i][j].a_star_weight[1]  # fixed check
+            print(f"{w:02d}" if w is not None else "@@", end=" ")
+        print("")
 
 
 grid_tiles = []
@@ -684,19 +827,29 @@ for pad in components[0].pads: # only for components with 2 pads
             pass
            
 
+for i in range(len(nets)):
+    print(f"Net {i}: {nets[i].name}, Pads: {[pad.getName() for pad in nets[i].getPadsInNet()]}")
+
 occupancyGridPads(grid_tiles)
 
-nets[1].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
+nets[2].addWireSegment((7*1000,0), (7*1000,-20*1000), 1)
 #nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
-#nets[2].addVia((20*1000,-15*1000))
+#nets[2].addVia((7*1000,-6*1000))
 occupancyGridUpdateWireSegment()
 
 printGrid()
 #veryBasicRoute()
 print("a star time")
-aStar((5*1000, 10*1000), (70*1000, -20*1000), nets, 1, 2)
-printGrid2()
+#aStar((70*1000, -8*1000), (54*1000, -8*1000), nets, nets[1])
+#printGrid2()
 
+aStar2((5*1000, -10*1000), (10*1000, -8*1000), 1, 2, nets[1], nets)
+
+printGrid3()
 
 
 processSESfile("SES/basic1layerRoute.ses")
+
+# print all nets
+for net in nets:
+    print(f"Net {net.name}, Pads: {[pad.getName() for pad in net.getPadsInNet()]}")
