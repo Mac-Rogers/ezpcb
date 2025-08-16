@@ -729,7 +729,6 @@ def printGrid2(current_net=None):
     dump(2, "Bottom")
     
 
-
 def getBlockerType(obj):
     # wires encoded as (start, end, layer)
     if isinstance(obj, tuple) and len(obj) == 3:
@@ -744,6 +743,31 @@ def reset_astar_weights():
     for row in grid_tiles:
         for tile in row:
             tile.a_star_weight = [None, None]
+
+def _is_blocked(nx, ny, layer, net, nets):
+    """Return True if grid_tiles[ny][nx] is blocked on 'layer' for this net."""
+    tile = grid_tiles[ny][nx]
+    for obj in tile.objects:
+        obj_type, obj_layer = getBlockerType(obj)
+
+        # Objects on the same net never block
+        if obj_type == "pad":
+            for net_i in nets:
+                if obj in net_i.getPadsInNet():
+                    if net_i.name == net.name:
+                        return False
+                    break
+        elif obj_type == "wire":
+            for net_i in nets:
+                if obj in net_i.getWiresInNet():
+                    if net_i.name == net.name:
+                        return False
+                    break
+
+        # Pads/wires on this layer block
+        if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
+            return True
+    return False
 
 def aStar2(start, end, start_layer, end_layer, net, nets):
  
@@ -892,7 +916,7 @@ def printGrid3():
 
 
 grid_tiles = []
-processDSNfile("DSN/mosfetDriver.dsn")
+processDSNfile("DSN/basic1layerCrossover.dsn")
 
 vector_list = []
 for pad in components[0].pads: # only for components with 2 pads
@@ -948,7 +972,7 @@ for net in nets:
         printGrid3()
 
 
-processSESfile("SES/mosfetDriver.ses")
+processSESfile("SES/basic1layerCrossover.ses")
 
 # print all nets
 for net in nets:
