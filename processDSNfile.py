@@ -6,7 +6,7 @@ pads = []
 nets = []
 components = []
 
-GRID_SPACING = 1.5
+GRID_SPACING = 2
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -740,6 +740,10 @@ def getBlockerType(obj):
 
     return "unknown", None
 
+def reset_astar_weights():
+    for row in grid_tiles:
+        for tile in row:
+            tile.a_star_weight = [None, None]
 
 def aStar2(start, end, start_layer, end_layer, net, nets):
  
@@ -829,7 +833,7 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
     start_layer = 0 if start_layer == 1 else 1
     end_layer   = 0 if end_layer == 1 else 1
 
-    current_tile = (ex, ey, end_layer)  # (x, y, layer)
+    current_tile = [ex, ey, end_layer]  # (x, y, layer)
     solve_path = []
 
     while True:
@@ -840,7 +844,7 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
         if current_weight is None:
             print("No path (hit None).")
             break
-        if current_weight == 0 and (x, y, layer) == (sx, sy, start_layer):
+        if current_weight == 0 and [x, y, layer] == [sx, sy, start_layer]:
             break
 
         # find adjacent candidates
@@ -851,13 +855,13 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
             if 0 <= nx < len(grid_tiles[0]) and 0 <= ny < len(grid_tiles):
                 w = grid_tiles[ny][nx].a_star_weight[layer]
                 if w is not None and w >= 0 and w < current_weight:
-                    adjacent.append((nx, ny, layer, w))
+                    adjacent.append([nx, ny, layer, w])
 
         # check via (stay in place, switch layers)
         other_layer = 1 - layer
         ow = grid_tiles[y][x].a_star_weight[other_layer]
         if ow is not None and ow >= 0 and ow < current_weight:
-            adjacent.append((x, y, other_layer, ow))
+            adjacent.append([x, y, other_layer, ow])
 
         if not adjacent:
             print("Stuck: no lower-weight neighbors at", current_tile)
@@ -867,6 +871,7 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
         current_tile = min(adjacent, key=lambda pos: pos[3])[:3]
 
     print("A* path found:", solve_path[::-1])  # flip to start→end
+    return solve_path[::-1]  # return the path from start to end
 
 
 def printGrid3():
@@ -887,7 +892,7 @@ def printGrid3():
 
 
 grid_tiles = []
-processDSNfile("DSN/basic1layerRoute.dsn")
+processDSNfile("DSN/mosfetDriver.dsn")
 
 vector_list = []
 for pad in components[0].pads: # only for components with 2 pads
@@ -903,7 +908,7 @@ for i in range(len(nets)):
 
 occupancyGridPads(grid_tiles)
 
-nets[2].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
+#nets[2].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
 #nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
 #nets[2].addVia((7*1000,-6*1000))
 occupancyGridUpdateWireSegment()
@@ -914,12 +919,36 @@ print("a star time")
 #aStar((70*1000, -8*1000), (54*1000, -8*1000), nets, nets[1])
 #printGrid2()
 
-aStar2((5*1000, -10*1000), (54*1000, -8*1000), 1, 1, nets[3], nets)
+#aStar2((5*1000, -10*1000), (54*1000, -8*1000), 1, 2, nets[3], nets)
+for net in nets:
+    for i in range(len(net.getPadsInNet()) - 1):
+        
+        pad = net.getPadsInNet()[i]
+        next_pad = net.getPadsInNet()[i + 1]
 
-printGrid3()
+        # multiple both elements of pad tuple by 1000
+        pad_mils = (int(pad.getPosition()[0] * 1000), int(pad.getPosition()[1] * 1000))
+        next_pad_mils = (int(next_pad.getPosition()[0] * 1000), int(next_pad.getPosition()[1] * 1000))
+        
+        print(f"Routing from {pad_mils} to {next_pad_mils}")
+        reset_astar_weights()
+        path = aStar2(pad_mils, next_pad_mils, 1, 1, net, nets)
+
+        # make path a wire
+        for j in range(len(path) - 1):
+            start = path[j][:2]
+            end = path[j + 1][:2]
+            start = (start[0] * GRID_SPACING * 1000, -start[1] * GRID_SPACING * 1000)  # convert to mils
+            end = (end[0] * GRID_SPACING * 1000, -end[1] * GRID_SPACING * 1000)  # convert to mils
+            #print(start, end)
+            net.addWireSegment(start, end, 1)
+
+        occupancyGridUpdateWireSegment()
+        printGrid()
+        printGrid3()
 
 
-processSESfile("SES/basic1layerRoute.ses")
+processSESfile("SES/mosfetDriver.ses")
 
 # print all nets
 for net in nets:
