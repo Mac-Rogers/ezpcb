@@ -147,11 +147,11 @@ class Component:
             rel_y = pad_y - comp_y
 
             # Perform rotation
-            rot_x = cos_a * (comp_x - pad_x) - sin_a * (comp_x - pad_y)
-            rot_y = sin_a * (comp_x - pad_x) + cos_a * (comp_x - pad_y)
+            new_pad_x = comp_x + rel_x * cos_a - rel_y * sin_a
+            new_pad_y = comp_y + rel_x * sin_a + rel_y * cos_a
 
+            pad.setPosition(new_pad_x, new_pad_y)
 
-            pad.setPosition(rot_x, rot_y)
 
             
 
