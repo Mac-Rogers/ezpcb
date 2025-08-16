@@ -769,133 +769,135 @@ def _is_blocked(nx, ny, layer, net, nets):
             return True
     return False
 
+def _obj_net_name(obj, nets):
+    # Return the net name (str) for a pad/wire object, or None if none.
+    for net_i in nets:
+        if isinstance(obj, Pad):
+            if obj in net_i.getPadsInNet():
+                return net_i.name
+        else:
+            # wire tuple (start, end, layer)
+            if obj in net_i.getWiresInNet():
+                return net_i.name
+    return None
+
+def tile_status(x, y, layer, net, nets):
+    """
+    Classify what's on grid_tiles[y][x] at 'layer' relative to 'net'.
+    Returns dict flags:
+      same_pad, same_wire, foreign_pad, foreign_wire (all booleans)
+    """
+    flags = {"same_pad": False, "same_wire": False,
+             "foreign_pad": False, "foreign_wire": False}
+    for obj in grid_tiles[y][x].objects:
+        obj_type, obj_layer = getBlockerType(obj)
+        if obj_type not in ("pad", "wire"): 
+            continue
+        if (obj_layer - 1) != layer:
+            continue
+        obj_net = _obj_net_name(obj, nets)
+        if obj_type == "pad":
+            if obj_net == net.name:
+                flags["same_pad"] = True
+            else:
+                flags["foreign_pad"] = True
+        else:  # wire
+            if obj_net == net.name:
+                flags["same_wire"] = True
+            else:
+                flags["foreign_wire"] = True
+        # early exit if fully blocked
+        if flags["foreign_pad"] or flags["foreign_wire"]:
+            break
+    return flags
+
+def is_walkable(x, y, layer, net, nets):
+    f = tile_status(x, y, layer, net, nets)
+    # Block if any foreign object on this layer.
+    if f["foreign_pad"] or f["foreign_wire"]:
+        return False
+    # Allow own pad (even if a same-net wire also overlaps that pad).
+    if f["same_pad"]:
+        return True
+    # Do NOT pass through wires, even same net.
+    if f["same_wire"]:
+        return False
+    # Empty tile
+    return True
+
+
 def aStar2(start, end, start_layer, end_layer, net, nets):
- 
     sx = int(start[0] / 1000 // GRID_SPACING)
     sy = int(-start[1] / 1000 // GRID_SPACING)
     ex = int(end[0] / 1000 // GRID_SPACING)
     ey = int(-end[1] / 1000 // GRID_SPACING)
-    print("start,end (cells):", (sx, sy), (ex, ey))
+
+    # normalize layers to 0/1
+    start_layer = 0 if start_layer == 1 else 1
+    end_layer   = 0 if end_layer   == 1 else 1
+
+    # reset weights/parents
+    for row in grid_tiles:
+        for tile in row:
+            tile.a_star_weight = [None, None]
+            tile.a_star_parent = [None, None]
 
     q = deque()
-    # initialise start cell
-    #grid_tiles[sy][sx].a_star_weight[start_layer - 1] = 0
-    #q.append((sx, sy, start_layer - 1))
-    for layer in (0, 1):
-        grid_tiles[sy][sx].a_star_weight[layer] = 0
-        q.append((sx, sy, layer))
 
+    # Enqueue start on layers that are walkable OR have our pad
+    for layer in (0, 1):
+        f = tile_status(sx, sy, layer, net, nets)
+        if is_walkable(sx, sy, layer, net, nets) or f["same_pad"]:
+            grid_tiles[sy][sx].a_star_weight[layer] = 0
+            q.append((sx, sy, layer))
+
+    # ---- BFS fill: 4-connected only (no diagonal spread) ----
     while q:
         x, y, layer = q.popleft()
         cur_w = grid_tiles[y][x].a_star_weight[layer]
 
-        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),
-                    (-1,-1),(1,-1),(-1,1),(1,1)]:
+        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
             nx, ny = x + dx, y + dy
             if nx < 0 or ny < 0 or ny >= len(grid_tiles) or nx >= len(grid_tiles[0]):
                 continue
-
-            tile = grid_tiles[ny][nx]
-            if tile.a_star_weight[layer] is not None:
-                continue  # already visited
-
-            # --- blocker check ---
-            blocked = False
-            for obj in tile.objects:
-                obj_type, obj_layer = getBlockerType(obj)
-
-                net_name = None
-                if obj_type == "pad":
-                    for net_i in nets:
-                        if obj in net_i.getPadsInNet():
-                            net_name = net_i.name
-                            break
-                elif obj_type == "wire":
-                    for net_i in nets:
-                        if obj in net_i.getWiresInNet():
-                            net_name = net_i.name
-                            break
-
-                if net_name == net.name:
-                    blocked = False
-                    break
-
-                if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
-                    blocked = True
-                    break
-
-            if blocked:
+            if grid_tiles[ny][nx].a_star_weight[layer] is not None:
+                continue
+            if not is_walkable(nx, ny, layer, net, nets):
                 continue
 
-            tile.a_star_weight[layer] = cur_w + 1
+            grid_tiles[ny][nx].a_star_weight[layer] = cur_w + 1
+            grid_tiles[ny][nx].a_star_parent[layer] = (x, y, layer)
             q.append((nx, ny, layer))
 
-        # --- NEW: try switching layer at same (x, y) ---
+        # Via (layer switch in place) only if destination layer at (x,y) is walkable OR has our pad
         other_layer = 1 - layer
         if grid_tiles[y][x].a_star_weight[other_layer] is None:
-            # check blockers on the other layer at this same spot
-            blocked = False
-            for obj in grid_tiles[y][x].objects:
-                obj_type, obj_layer = getBlockerType(obj)
-
-                if obj_type in ("pad", "wire") and obj_layer - 1 == other_layer:
-                    blocked = True
-                    break
-
-            if not blocked:
+            f_other = tile_status(x, y, other_layer, net, nets)
+            if is_walkable(x, y, other_layer, net, nets) or f_other["same_pad"]:
                 grid_tiles[y][x].a_star_weight[other_layer] = cur_w + 1
+                grid_tiles[y][x].a_star_parent[other_layer] = (x, y, layer)
                 q.append((x, y, other_layer))
 
-    print("A* fill completing... Solving...")
-    print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
-    # start at ex, ey
-    # find adjacent cells' values
-    # move new cell is the adjacent cell with the lowest weight
-    # repeat until 0
-    
-    # normalize layers to 0 (top) or 1 (bottom)
-    start_layer = 0 if start_layer == 1 else 1
-    end_layer   = 0 if end_layer == 1 else 1
+    # Choose reachable end layer with smallest weight
+    end_candidates = [l for l in (end_layer, 1 - end_layer)
+                      if grid_tiles[ey][ex].a_star_weight[l] is not None]
+    if not end_candidates:
+        print("No path.")
+        return []
+    end_layer = min(end_candidates, key=lambda l: grid_tiles[ey][ex].a_star_weight[l])
 
-    current_tile = [ex, ey, end_layer]  # (x, y, layer)
-    solve_path = []
-
-    while True:
-        x, y, layer = current_tile
-        solve_path.append(current_tile)
-
-        current_weight = grid_tiles[y][x].a_star_weight[layer]
-        if current_weight is None:
-            print("No path (hit None).")
+    # Backtrack by parents (no weight jumps)
+    path = []
+    cur = (ex, ey, end_layer)
+    while cur is not None:
+        path.append(list(cur))
+        x, y, layer = cur
+        if x == sx and y == sy and layer == start_layer:
             break
-        if current_weight == 0 and [x, y, layer] == [sx, sy, start_layer]:
-            break
+        cur = grid_tiles[y][x].a_star_parent[layer]
 
-        # find adjacent candidates
-        adjacent = []
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                    (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < len(grid_tiles[0]) and 0 <= ny < len(grid_tiles):
-                w = grid_tiles[ny][nx].a_star_weight[layer]
-                if w is not None and w >= 0 and w < current_weight:
-                    adjacent.append([nx, ny, layer, w])
-
-        # check via (stay in place, switch layers)
-        other_layer = 1 - layer
-        ow = grid_tiles[y][x].a_star_weight[other_layer]
-        if ow is not None and ow >= 0 and ow < current_weight:
-            adjacent.append([x, y, other_layer, ow])
-
-        if not adjacent:
-            print("Stuck: no lower-weight neighbors at", current_tile)
-            break
-
-        # pick best candidate
-        current_tile = min(adjacent, key=lambda pos: pos[3])[:3]
-
-    print("A* path found:", solve_path[::-1])  # flip to start→end
-    return solve_path[::-1]  # return the path from start to end
+    path.reverse()
+    return path
 
 
 def printGrid3():
