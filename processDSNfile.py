@@ -107,6 +107,9 @@ class Net:
     def getPadsInNet(self):
         return self.pads
 
+    def getWiresInNet(self):
+        return self.wires
+
     def addOccupancyGridPosition(self, column, row):
         self.occupancy_grid_position.append((column, row))
 
@@ -217,7 +220,11 @@ def processDSNfile(file_name):
         if "shape" in line:
             
             for pad_i in (pads):
-                if pad_i.getName() in lines[i - 1] or pad_i.getName() in lines[i - 2]:
+                if pad_i.shape is not None:
+                    # if it's already been populated, it means its a duplicate in the library
+                    # we want to apply these properties to the next pad with the same name
+                    continue
+                if pad_i.getName() in lines[i - 1]:# or pad_i.getName() in lines[i - 2]:
                     shape_description = lines[i].strip()[1:-2].split("(")[1].split(" ")
                     shape_type = shape_description[0]
                     shape_layer = shape_description[1]
@@ -341,6 +348,7 @@ def occupancyGridPads(grid_tiles):
     # if the pad.shape is a polygon -> find the bounding box of the polygon and treat it as a rectangle
     for pad in pads:
         if pad.shape == "circle":
+            print(pad.getName(), pad.ID, pad.getPosition())
             # treat as square
             #diameter = pad.getDiameter()
             diameter = pad.outline
@@ -351,11 +359,12 @@ def occupancyGridPads(grid_tiles):
             # find grid cells
             col1 = int(x1 // GRID_SPACING)
             col2 = int(x2 // GRID_SPACING)
-            row1 = int(y1 // GRID_SPACING)
-            row2 = int(y2 // GRID_SPACING)
+            row1 = int(-y1 // GRID_SPACING)
+            row2 = int(-y2 // GRID_SPACING)
+            print(f"col1: {col1}, col2: {col2}, row1: {row1}, row2: {row2}")
             # mark grid cells as occupied
-            for row in range(row1, row2 + 1):
-                for col in range(col1, col2 + 1):
+            for row in range(min(row1, row2), max(row1, row2) + 1):
+                for col in range(min(col1, col2), max(col1, col2) + 1):
                     grid_tiles[row][col].addObject(pad)
         elif pad.shape == "polygon":
             # find bounding box
@@ -370,7 +379,7 @@ def occupancyGridPads(grid_tiles):
             for row in range(min(row1, row2), max(row1, row2) + 1):
                 for col in range(min(col1, col2), max(col1, col2) + 1):
                     grid_tiles[row][col].addObject(pad)
-                    
+
     return grid_tiles
 
 def occupancyGridUpdateWireSegment():
@@ -721,7 +730,6 @@ def printGrid2(current_net=None):
     
 
 
-
 def getBlockerType(obj):
     # wires encoded as (start, end, layer)
     if isinstance(obj, tuple) and len(obj) == 3:
@@ -747,6 +755,10 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
     grid_tiles[sy][sx].a_star_weight[0] = 0
     grid_tiles[sy][sx].a_star_weight[1] = 0
 
+    print("PLEASE")
+    print(grid_tiles[sy][sx].objects)
+    print(grid_tiles[sy][sx].objects[0].ID)
+
     current_weight = 0
     for _ in range(len(grid_tiles) * len(grid_tiles[0])):
         for x, y in current_layer:
@@ -758,17 +770,41 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
 
                 objects = grid_tiles[ny][nx].objects
 
+                # if haven't checked the top
                 if grid_tiles[ny][nx].a_star_weight[0] is None:
                     blocked = False
                     for obj in objects:
                         obj_type, layer = getBlockerType(obj)
-                        # get the net name:
-                        if obj_type == "wire":
-                            
 
-                        if (obj_type == "pad" and layer % 20 == 1) or (obj_type == "wire" and layer == 1):
-                            # print("Blocking at (", nx, ny, ") on layer top because of", obj_type, layer)
+
+                        # find the net associated with obj
+                        net_name = None
+                        if obj_type == "pad":
+                            # search through nets to find the net containing this pad
+                            for net_i in nets:
+                                #print(obj, net.getPadsInNet())
+                                if obj in net_i.getPadsInNet():
+                                    net_name = net_i.name
+                                    break
+                        elif obj_type == "wire":
+                            # search through nets to find the net containing this wire
+                            for net_i in nets:
+                                if obj in net_i.getWiresInNet():
+                                    net_name = net_i.name
+                                    break
+                        #print("Net for", obj, "is", net_name, "at x", nx, "y", ny)
+
+                        #print(net_name, net.name)
+                        if net_name == net.name:
+                            #print(f"ignoring net {net_name}")
+                            # this object is in the same net as the wire we're routing
+                            # don't block on this pad or wire
+                            blocked = False
+                            break
+
+                        elif (obj_type == "pad" and layer == 1) or (obj_type == "wire" and layer == 1):
                             blocked = True
+                            #print("Blocking on", obj, "net", net_name, "tile net", net.name, "position", (nx, ny))
                             break
                     if blocked:
                         grid_tiles[ny][nx].a_star_weight[0] = -1  # 🚩 mark as permanently blocked
@@ -781,10 +817,28 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
                     blocked = False
                     for obj in objects:
                         obj_type, layer = getBlockerType(obj)
-                        if (obj_type == "pad" and layer % 20 == 2) or (obj_type == "wire" and layer == 2):
-                            # print("Blocking at (", nx, ny, ") on layer bottom because of", obj_type, layer)
+
+                        # find the net associated with obj
+                        net_name = None
+                        if obj_type == "pad":
+                            for net_i in nets:
+                                if obj in net_i.getPadsInNet():
+                                    net_name = net_i.name
+                                    break
+                        elif obj_type == "wire":
+                            for net_i in nets:
+                                if obj in net_i.getWiresInNet():
+                                    net_name = net_i.name
+                                    break
+
+                        if net_name == net.name:
+                            blocked = False
+                            break
+
+                        elif (obj_type == "pad" and layer == 2) or (obj_type == "wire" and layer == 2):
                             blocked = True
                             break
+
                     if blocked:
                         grid_tiles[ny][nx].a_star_weight[1] = -1
                     else:
@@ -795,7 +849,56 @@ def aStar2(start, end, start_layer, end_layer, net, nets):
         if not next_layer:
             break
         current_layer, next_layer = next_layer, []
+    
+    print("A* fill completing... Solving...")
+    print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
+    # start at ex, ey
+    # find adjacent cells' values
+    # move new cell is the adjacent cell with the lowest weight
+    # repeat until 0
+    
+    # normalize layers to 0 (top) or 1 (bottom)
+    start_layer = 0 if start_layer == 1 else 1
+    end_layer   = 0 if end_layer == 1 else 1
 
+    current_tile = (ex, ey, end_layer)  # (x, y, layer)
+    solve_path = []
+
+    while True:
+        x, y, layer = current_tile
+        solve_path.append(current_tile)
+
+        current_weight = grid_tiles[y][x].a_star_weight[layer]
+        if current_weight is None:
+            print("No path (hit None).")
+            break
+        if current_weight == 0 and (x, y, layer) == (sx, sy, start_layer):
+            break
+
+        # find adjacent candidates
+        adjacent = []
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                    (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < len(grid_tiles[0]) and 0 <= ny < len(grid_tiles):
+                w = grid_tiles[ny][nx].a_star_weight[layer]
+                if w is not None and w >= 0 and w < current_weight:
+                    adjacent.append((nx, ny, layer, w))
+
+        # check via (stay in place, switch layers)
+        other_layer = 1 - layer
+        ow = grid_tiles[y][x].a_star_weight[other_layer]
+        if ow is not None and ow >= 0 and ow < current_weight:
+            adjacent.append((x, y, other_layer, ow))
+
+        if not adjacent:
+            print("Stuck: no lower-weight neighbors at", current_tile)
+            break
+
+        # pick best candidate
+        current_tile = min(adjacent, key=lambda pos: pos[3])[:3]
+
+    print("A* path found:", solve_path[::-1])  # flip to start→end
 
 
 def printGrid3():
@@ -832,7 +935,7 @@ for i in range(len(nets)):
 
 occupancyGridPads(grid_tiles)
 
-nets[2].addWireSegment((7*1000,0), (7*1000,-20*1000), 1)
+nets[2].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
 #nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
 #nets[2].addVia((7*1000,-6*1000))
 occupancyGridUpdateWireSegment()
@@ -843,7 +946,7 @@ print("a star time")
 #aStar((70*1000, -8*1000), (54*1000, -8*1000), nets, nets[1])
 #printGrid2()
 
-aStar2((5*1000, -10*1000), (10*1000, -8*1000), 1, 2, nets[1], nets)
+aStar2((5*1000, -10*1000), (54*1000, -8*1000), 1, 1, nets[3], nets)
 
 printGrid3()
 
@@ -852,4 +955,4 @@ processSESfile("SES/basic1layerRoute.ses")
 
 # print all nets
 for net in nets:
-    print(f"Net {net.name}, Pads: {[pad.getName() for pad in net.getPadsInNet()]}")
+    print(f"Net {net.name}, Pads: {[pad.getName() for pad in net.getPadsInNet()]}, pad locations: {[pad.getPosition() for pad in net.getPadsInNet()]}")
