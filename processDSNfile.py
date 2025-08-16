@@ -83,10 +83,12 @@ class Component:
     def addPad(self, pad):
         self.pads.append(pad)
     
-
+boundary = []
 
 def processDSNfile(file_name):
     # function to populate the pads and nets lists from a DSN file
+
+    global boundary
 
     with open(file_name, "r") as file:
         content = file.read()
@@ -95,7 +97,6 @@ def processDSNfile(file_name):
 
     lines = content.split("\n")
     #spaces = []
-    boundary = []
 
     for i in range(len(lines)):
         line = lines[i]
@@ -104,7 +105,7 @@ def processDSNfile(file_name):
         line = line.strip()[1:-1]
 
         if "boundary" in line:
-            boundary = line.split(" ")[2:]
+            boundary = line.split(" ")[3:]
             if boundary[-1] == '':
                 boundary.pop()  # remove last empty string if it exists
             for i in range(len(boundary)):
@@ -165,7 +166,8 @@ def processDSNfile(file_name):
     for pad in pads:
         if pad.getID() - last_pad_id < 16:
             # add pad to current component
-            components.append(Component())
+            #components.append(Component())
+            pass
         else:
             # create new component
             pass
@@ -217,12 +219,35 @@ def veryBasicRoute():
             pad1_pos = convertCoordinates(pad1_pos)
             pad2_pos = convertCoordinates(pad2_pos)
 
-            print(f"net: {net.name}, {pad1_pos} to {pad2_pos}")
+            #print(f"net: {net.name}, {pad1_pos} to {pad2_pos}")
             net.addWireSegment(pad1_pos, pad2_pos, 1)
+
+def makeBoundaryAReasonableFormat(boundary):
+    # currently formatted as: [x1 y1 x2 y2 ... xn yn]
+    xs = boundary[0::2]
+    ys = boundary[1::2]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    return ((0,0), (width * 1000, height * 1000))
+
+def occupancyGrid():
+    grid_spacing = 1000 # measured in 1/1000 thou or something
+    corners = makeBoundaryAReasonableFormat(boundary)
+    print(corners)
+    number_of_cells_x = corners[1][0] // grid_spacing
+    number_of_cells_y = corners[1][1] // grid_spacing
+    print(f"Number of cells: {number_of_cells_x} x {number_of_cells_y}")
+
+    # check if pad overlaps the corner of a grid
+    
+
 
 
 processDSNfile("DSN/basic1layerRoute.dsn")
 
+occupancyGrid()
 veryBasicRoute()
+nets[1].addWireSegment((0,0), (94.6*1000,27.5*1000), 1)
+
 
 processSESfile("SES/basic1layerRoute.ses")
