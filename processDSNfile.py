@@ -584,7 +584,7 @@ def occupancyGridPads(grid_tiles):
     print(corners)
     number_of_cells_x = corners[1][0] // GRID_SPACING
     number_of_cells_y = corners[1][1] // GRID_SPACING
-    print(f"Number of cells: {number_of_cells_x} x {number_of_cells_y}")
+    #print(f"Number of cells: {number_of_cells_x} x {number_of_cells_y}")
     
     for i in range(int(number_of_cells_y)):
         grid_tiles.append([])
@@ -596,11 +596,11 @@ def occupancyGridPads(grid_tiles):
     # if the pad.shape is a polygon -> find the bounding box of the polygon and treat it as a rectangle
     for pad in pads:
         if pad.shape == "circle":
-            print(pad.getName(), pad.ID, pad.getPosition())
+            #print(pad.getName(), pad.ID, pad.getPosition())
             # treat as square
             #diameter = pad.getDiameter()
             diameter = pad.outline
-            print(f"diameter: {diameter}")
+            #print(f"diameter: {diameter}")
             x, y = pad.getPosition()
             x1, y1 = x - diameter/2, y - diameter/2
             x2, y2 = x + diameter/2, y + diameter/2
@@ -609,7 +609,7 @@ def occupancyGridPads(grid_tiles):
             col2 = int(x2 // GRID_SPACING)
             row1 = int(-y1 // GRID_SPACING)
             row2 = int(-y2 // GRID_SPACING)
-            print(f"col1: {col1}, col2: {col2}, row1: {row1}, row2: {row2}")
+            #print(f"col1: {col1}, col2: {col2}, row1: {row1}, row2: {row2}")
             # mark grid cells as occupied
             for row in range(min(row1, row2), max(row1, row2) + 1):
                 for col in range(min(col1, col2), max(col1, col2) + 1):
@@ -1448,6 +1448,7 @@ class Worker(QObject):
                     )
 
             self.finished.emit("Routing complete. SES updated.")
+            print("Finished")
         except Exception as e:
             # Bubble up errors to the log as well
             self.finished.emit(f"Routing aborted with error: {e!r}")
@@ -1463,8 +1464,11 @@ if __name__ == "__main__":
     thread_holder = {"thread": None, "worker": None}  # keep references alive
 
     def start_routing(slider_values_list):
+        global GRID_SPACING
         # Optional: map slider list to named dict if you need names
         named = w.get_named_values()
+        GRID_SPACING = named.get("Route Clearance", 2)  # default to 2 if not set
+
         w.log_message(f"Starting routing with sliders: {named}")
 
         # Guard against restarting while a job is running
