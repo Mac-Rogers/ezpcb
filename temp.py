@@ -2,12 +2,6 @@ import numpy as np
 import math
 import random
 from collections import deque
-import sys
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QSlider, QPushButton, QPlainTextEdit, QSizePolicy, QSpacerItem
-)
 from rectpack import newPacker
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -17,7 +11,7 @@ pads = []
 nets = []
 components = []
 
-GRID_SPACING = 2
+GRID_SPACING = 1.5
 FILE_NAME = "basic1layerRoute"
 
 class Pad:
@@ -105,6 +99,7 @@ class Net:
         self.pads = pads
         self.wires = [] # will contain tuples of coordinates for wire segments in the net, and layer number
         self.vias = []
+
         self.occupancy_grid_position = []  # list of tuples (column, row) for occupancy grid
 
     def addWireSegment(self, start, end, layer):
@@ -118,9 +113,6 @@ class Net:
 
     def getPadsInNet(self):
         return self.pads
-
-    def getWiresInNet(self):
-        return self.wires
 
     def addOccupancyGridPosition(self, column, row):
         self.occupancy_grid_position.append((column, row))
@@ -291,142 +283,11 @@ class GridTile:
         self.x = x
         self.y = y
         self.objects = [] # objects can be pad object or wire object or via object
-        self.a_star_weight = [None, None] # 2 element array for top and bottom layer
+        self.a_star_weight = [] # 2 element array for top and bottom layer
     
     def addObject(self, object):
         self.objects.append(object)
-
-
-
-class SliderRow(QWidget):
-    """A named horizontal slider with 0.1 resolution and live value label."""
-    def __init__(self, name: str, minimum: float = 0.0, maximum: float = 100.0,
-                 initial: float = None, step: float = 0.1, parent=None):
-        super().__init__(parent)
-        if step <= 0:
-            raise ValueError("step must be > 0")
-        if maximum < minimum:
-            minimum, maximum = maximum, minimum
-
-        self.name = name
-        self.step = step
-        self.scale = int(round(1.0 / step))  # e.g. 0.1 -> 10, 0.05 -> 20
-        self.min_float = float(minimum)
-        self.max_float = float(maximum)
-        if initial is None:
-            initial = (self.min_float + self.max_float) / 2.0
-        initial = max(self.min_float, min(self.max_float, initial))
-
-        # Widgets
-        self.name_lbl = QLabel(str(name))
-        self.name_lbl.setMinimumWidth(120)
-
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(self._to_int(self.min_float), self._to_int(self.max_float))
-        self.slider.setTickInterval(max(1, (self._to_int(self.max_float) - self._to_int(self.min_float)) // 10))
-        self.slider.setTickPosition(QSlider.TicksBelow)
-        self.slider.setSingleStep(1)  # 1 int step = `step` in float
-        self.slider.setPageStep(2)    # keyboard PgUp/PgDn = 2 steps (~0.2 if step=0.1)
-        self.slider.setValue(self._to_int(initial))
-
-        self.value_lbl = QLabel(self._fmt(initial))
-        self.value_lbl.setMinimumWidth(60)
-        self.value_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        self.slider.valueChanged.connect(self._on_value_changed)
-
-        row = QHBoxLayout(self)
-        row.addWidget(self.name_lbl)
-        row.addWidget(self.slider, 1)
-        row.addWidget(self.value_lbl)
-
-    def _to_int(self, x: float) -> int:
-        return int(round(x * self.scale))
-
-    def _to_float(self, i: int) -> float:
-        return i / float(self.scale)
-
-    def _fmt(self, x: float) -> str:
-        # show 1 decimal for 0.1 steps, but trim trailing zeros nicely
-        return f"{x:.3f}".rstrip('0').rstrip('.')  # supports other steps like 0.05 too
-
-    def _on_value_changed(self, i: int):
-        self.value_lbl.setText(self._fmt(self._to_float(i)))
-
-    # Public API
-    def value(self) -> float:
-        return self._to_float(self.slider.value())
-
-    def set_value(self, x: float):
-        x = max(self.min_float, min(self.max_float, x))
-        self.slider.setValue(self._to_int(x))
-
-
-class SliderPanel(QWidget):
-    """
-    Stack of named sliders (each with its own range), a Submit button, and a log.
-    Add sliders one-by-one with add_slider(...).
-    """
-    valuesSubmitted = pyqtSignal(list)  # emits list[float] on Submit
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Named Sliders (0.1 resolution) + Log")
-        self.resize(560, 480)
-
-        self._sliders = []
-
-        self.layout = QVBoxLayout(self)
-
-        # Spacer keeps sliders compact if many are added
-        self.layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
-
-        # Submit button
-        self.submit_btn = QPushButton("Submit Values")
-        self.submit_btn.clicked.connect(self.on_submit)
-        self.layout.addWidget(self.submit_btn)
-
-        # Log
-        self.layout.addWidget(QLabel("Log"))
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setPlaceholderText("Messages will appear here...")
-        self.layout.addWidget(self.log, 1)
-
-        self.submit_btn.setAutoDefault(True)
-        self.submit_btn.setDefault(True)
-
-        self.log_message("Ready. Add sliders using add_slider(name, min, max, initial, step=0.1).")
-
-    # ---- Slider management ----
-    def add_slider(self, name: str, minimum: float, maximum: float, initial: float = None, step: float = 0.1):
-        row = SliderRow(name=name, minimum=minimum, maximum=maximum, initial=initial, step=step)
-        # Insert before the submit button/spacer section (i.e., near the top)
-        # We want all sliders stacked above the spacer; spacer is at index 0.
-        self.layout.insertWidget(len(self._sliders), row)
-        self._sliders.append(row)
-        self.log_message(f"Added slider '{name}' in range [{minimum}, {maximum}] step {step}.")
-        return row  # in case caller wants to keep a handle
-
-    def get_values(self) -> list:
-        return [row.value() for row in self._sliders]
-
-    def get_named_values(self) -> dict:
-        return {row.name: row.value() for row in self._sliders}
-
-    # ---- UI actions ----
-    def on_submit(self):
-        vals = self.get_named_values()
-        self.log_message(f"Submitted: {vals}")
-        print(vals)
-        # Emit ordered list of values matching slider order:
-        self.valuesSubmitted.emit(self.get_values())
-
-    def log_message(self, msg: str):
-        self.log.appendPlainText(msg)
-
-
-
+    
 boundary = []
 
 def processDSNfile(file_name):
@@ -468,11 +329,7 @@ def processDSNfile(file_name):
         if "shape" in line:
             
             for pad_i in (pads):
-                if pad_i.shape is not None:
-                    # if it's already been populated, it means its a duplicate in the library
-                    # we want to apply these properties to the next pad with the same name
-                    continue
-                if pad_i.getName() in lines[i - 1]:# or pad_i.getName() in lines[i - 2]:
+                if pad_i.getName() in lines[i - 1] or pad_i.getName() in lines[i - 2]:
                     shape_description = lines[i].strip()[1:-2].split("(")[1].split(" ")
                     shape_type = shape_description[0]
                     shape_layer = shape_description[1]
@@ -596,7 +453,6 @@ def occupancyGridPads(grid_tiles):
     # if the pad.shape is a polygon -> find the bounding box of the polygon and treat it as a rectangle
     for pad in pads:
         if pad.shape == "circle":
-            print(pad.getName(), pad.ID, pad.getPosition())
             # treat as square
             #diameter = pad.getDiameter()
             diameter = pad.outline
@@ -607,12 +463,11 @@ def occupancyGridPads(grid_tiles):
             # find grid cells
             col1 = int(x1 // GRID_SPACING)
             col2 = int(x2 // GRID_SPACING)
-            row1 = int(-y1 // GRID_SPACING)
-            row2 = int(-y2 // GRID_SPACING)
-            print(f"col1: {col1}, col2: {col2}, row1: {row1}, row2: {row2}")
+            row1 = int(y1 // GRID_SPACING)
+            row2 = int(y2 // GRID_SPACING)
             # mark grid cells as occupied
-            for row in range(min(row1, row2), max(row1, row2) + 1):
-                for col in range(min(col1, col2), max(col1, col2) + 1):
+            for row in range(row1, row2 + 1):
+                for col in range(col1, col2 + 1):
                     grid_tiles[row][col].addObject(pad)
         elif pad.shape == "polygon":
             # find bounding box
@@ -627,7 +482,7 @@ def occupancyGridPads(grid_tiles):
             for row in range(min(row1, row2), max(row1, row2) + 1):
                 for col in range(min(col1, col2), max(col1, col2) + 1):
                     grid_tiles[row][col].addObject(pad)
-
+                    
     return grid_tiles
 
 def occupancyGridUpdateWireSegment():
@@ -714,178 +569,275 @@ def printGrid():
             print(char, end=' ')
         print()
 
+def veryBasicRoute():
 
-def getBlockerType(obj):
-    # wires encoded as (start, end, layer)
-    if isinstance(obj, tuple) and len(obj) == 3:
-        return "wire", int(obj[2])
+    for net in nets:
+        pads_in_net = net.getPadsInNet()
+    
+        for i in range(len(pads_in_net) - 1):
+            #print(f"net: {net.name}, {pad.getPosition()}")
+            pad1_pos = pads_in_net[i].getPosition()
+            pad2_pos = pads_in_net[i + 1].getPosition()
 
-    if isinstance(obj, Pad):
-        return "pad", int(obj.layer)
+            pad1_pos = convertCoordinates(pad1_pos)
+            pad2_pos = convertCoordinates(pad2_pos)
 
-    return "unknown", None
+            #print(f"net: {net.name}, {pad1_pos} to {pad2_pos}")
+            net.addWireSegment(pad1_pos, pad2_pos, 1)
 
-def reset_astar_weights():
-    for row in grid_tiles:
-        for tile in row:
-            tile.a_star_weight = [None, None]
 
-def aStar2(start, end, start_layer, end_layer, net, nets):
- 
+
+def aStar(start, end, nets):
+    """
+    start,end in mils (x,y). Fills BOTH layers' weights:
+      grid_tiles[y][x].a_star_weight[1] -> Top
+      grid_tiles[y][x].a_star_weight[2] -> Bottom
+    Blocks:
+      - Vias from nets: both layers
+      - Wires from nets: their own layer
+      - Pads already attached to tiles: their own layer
+    Diagonals allowed. Start = 1 on both layers (even if blocked).
+    """
+    # --- mils -> grid cells (your convention) ---
     sx = int(start[0] / 1000 // GRID_SPACING)
     sy = int(-start[1] / 1000 // GRID_SPACING)
-    ex = int(end[0] / 1000 // GRID_SPACING)
-    ey = int(-end[1] / 1000 // GRID_SPACING)
-    #print("start,end (cells):", (sx, sy), (ex, ey))
+    ex = int(end[0]   / 1000 // GRID_SPACING)
+    ey = int(-end[1]  / 1000 // GRID_SPACING)
+    print("start,end (cells):", (sx, sy), (ex, ey))
 
-    q = deque()
-    # initialise start cell
-    #grid_tiles[sy][sx].a_star_weight[start_layer - 1] = 0
-    #q.append((sx, sy, start_layer - 1))
-    for layer in (0, 1):
-        grid_tiles[sy][sx].a_star_weight[layer] = 0
-        q.append((sx, sy, layer))
+    if not grid_tiles or not grid_tiles[0]:
+        return
 
-    while q:
-        x, y, layer = q.popleft()
-        cur_w = grid_tiles[y][x].a_star_weight[layer]
+    H = len(grid_tiles)
+    W = len(grid_tiles[0])
 
-        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),
-                    (-1,-1),(1,-1),(-1,1),(1,1)]:
-            nx, ny = x + dx, y + dy
-            if nx < 0 or ny < 0 or ny >= len(grid_tiles) or nx >= len(grid_tiles[0]):
-                continue
+    def in_bounds(x, y): return 0 <= x < W and 0 <= y < H
 
-            tile = grid_tiles[ny][nx]
-            if tile.a_star_weight[layer] is not None:
-                continue  # already visited
+    # init weights (index 0 unused; 1=Top, 2=Bottom)
+    for y in range(H):
+        for x in range(W):
+            grid_tiles[y][x].a_star_weight = [None, None, None]
 
-            # --- blocker check ---
-            blocked = False
-            for obj in tile.objects:
-                obj_type, obj_layer = getBlockerType(obj)
+    # ---- build blocked sets from nets (wires & vias) ----
+    blocked = {1: set(), 2: set()}  # per-layer sets of (x,y)
 
-                net_name = None
-                if obj_type == "pad":
-                    for net_i in nets:
-                        if obj in net_i.getPadsInNet():
-                            net_name = net_i.name
-                            break
-                elif obj_type == "wire":
-                    for net_i in nets:
-                        if obj in net_i.getWiresInNet():
-                            net_name = net_i.name
-                            break
+    def to_cell(pt):
+        return (int(pt[0] / 1000 // GRID_SPACING),
+                int(-pt[1] / 1000 // GRID_SPACING))
 
-                if net_name == net.name:
-                    blocked = False
-                    break
+    def bresenham_cells(c1, c2):
+        x1, y1 = c1; x2, y2 = c2
+        dx = abs(x2 - x1); dy = abs(y2 - y1)
+        sx = 1 if x2 >= x1 else -1
+        sy = 1 if y2 >= y1 else -1
+        x, y = x1, y1
+        cells = []
+        if dx >= dy:
+            err = dx // 2
+            while x != x2:
+                cells.append((x, y))
+                err -= dy
+                if err < 0:
+                    y += sy
+                    err += dx
+                x += sx
+            cells.append((x2, y2))
+        else:
+            err = dy // 2
+            while y != y2:
+                cells.append((x, y))
+                err -= dx
+                if err < 0:
+                    x += sx
+                    err += dy
+                y += sy
+            cells.append((x2, y2))
+        return cells
 
-                if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
-                    blocked = True
-                    break
+    # wires
+    for net in nets:
+        for (p1, p2, layer_id) in net.wires:
+            layer_id = 1 if layer_id == 1 else 2  # normalize
+            c1 = to_cell(p1); c2 = to_cell(p2)
+            for (cx, cy) in bresenham_cells(c1, c2):
+                if in_bounds(cx, cy):
+                    blocked[layer_id].add((cx, cy))
+        # vias: assume net.vias are mils (x,y); block both layers
+        for pos in net.vias:
+            cx, cy = to_cell(pos)
+            if in_bounds(cx, cy):
+                blocked[1].add((cx, cy))
+                blocked[2].add((cx, cy))
 
-            if blocked:
-                continue
+    # pads already on tiles: block their own layer
+    def obj_kind(o):
+        k = getattr(o, "kind", None)
+        if k: return str(k).lower()
+        name = o.__class__.__name__.lower()
+        if "via" in name: return "via"
+        if "pad" in name: return "pad"
+        if "wire" in name or "net" in name: return "wire"
+        return "unknown"
 
-            tile.a_star_weight[layer] = cur_w + 1
-            q.append((nx, ny, layer))
+    def obj_layer_id(o):
+        lay = getattr(o, "layer", None)
+        if lay is None: return None
+        if isinstance(lay, int): return 1 if lay == 1 else (2 if lay == 2 else None)
+        s = str(lay).lower()
+        if s.startswith("t") or s == "1": return 1
+        if s.startswith("b") or s == "2": return 2
+        return None
 
-        # --- NEW: try switching layer at same (x, y) ---
-        other_layer = 1 - layer
-        if grid_tiles[y][x].a_star_weight[other_layer] is None:
-            # check blockers on the other layer at this same spot
-            blocked = False
-            for obj in grid_tiles[y][x].objects:
-                obj_type, obj_layer = getBlockerType(obj)
+    for y in range(H):
+        for x in range(W):
+            for o in grid_tiles[y][x].objects:
+                k = obj_kind(o)
+                if k == "via":
+                    blocked[1].add((x, y)); blocked[2].add((x, y))
+                elif k == "pad":
+                    lid = obj_layer_id(o)
+                    if lid in (1, 2): blocked[lid].add((x, y))
+                elif k == "wire":
+                    lid = obj_layer_id(o)
+                    if lid in (1, 2): blocked[lid].add((x, y))
 
-                if obj_type in ("pad", "wire") and obj_layer - 1 == other_layer:
-                    blocked = True
-                    break
+    def is_blocked(x, y, lid): return (x, y) in blocked[lid]
 
-            if not blocked:
-                grid_tiles[y][x].a_star_weight[other_layer] = cur_w + 1
-                q.append((x, y, other_layer))
+    # ---- BFS fill per layer (diagonals allowed) ----
+    nbrs = [(-1,-1),(0,-1),(1,-1),
+            (-1, 0),        (1, 0),
+            (-1, 1),(0, 1),(1, 1)]
 
-    #print("A* fill completing... Solving...")
-    #print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
-    # start at ex, ey
-    # find adjacent cells' values
-    # move new cell is the adjacent cell with the lowest weight
-    # repeat until 0
-    
-    # normalize layers to 0 (top) or 1 (bottom)
-    start_layer = 0 if start_layer == 1 else 1
-    end_layer   = 0 if end_layer == 1 else 1
+    def bfs_layer(layer_id):
+        if not in_bounds(sx, sy): return
+        grid_tiles[sy][sx].a_star_weight[layer_id] = 1  # seed even if blocked
+        q = deque([(sx, sy)])
+        while q:
+            x, y = q.popleft()
+            w = grid_tiles[y][x].a_star_weight[layer_id]
+            for dx, dy in nbrs:
+                nx, ny = x + dx, y + dy
+                if not in_bounds(nx, ny): continue
+                if grid_tiles[ny][nx].a_star_weight[layer_id] is not None: continue
+                if is_blocked(nx, ny, layer_id): continue
+                grid_tiles[ny][nx].a_star_weight[layer_id] = w + 1
+                q.append((nx, ny))
 
-    current_tile = [ex, ey, end_layer]  # (x, y, layer)
-    solve_path = []
-
-    while True:
-        x, y, layer = current_tile
-        solve_path.append(current_tile)
-
-        current_weight = grid_tiles[y][x].a_star_weight[layer]
-        if current_weight is None:
-            print("No path (hit None).")
-            break
-        if current_weight == 0 and [x, y, layer] == [sx, sy, start_layer]:
-            break
-
-        # find adjacent candidates
-        adjacent = []
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                    (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < len(grid_tiles[0]) and 0 <= ny < len(grid_tiles):
-                w = grid_tiles[ny][nx].a_star_weight[layer]
-                if w is not None and w >= 0 and w < current_weight:
-                    adjacent.append([nx, ny, layer, w])
-
-        # check via (stay in place, switch layers)
-        other_layer = 1 - layer
-        ow = grid_tiles[y][x].a_star_weight[other_layer]
-        if ow is not None and ow >= 0 and ow < current_weight:
-            adjacent.append([x, y, other_layer, ow])
-
-        if not adjacent:
-            print(f"Stuck: no lower-weight neighbors at {current_tile}, traveled a distance of {len(solve_path)} with {int(np.sqrt((ex - x) ** 2 + (ey - y) ** 2))} to go.")
-            break
-
-        # pick best candidate
-        current_tile = min(adjacent, key=lambda pos: pos[3])[:3]
-
-    #print("A* path found:", solve_path[::-1])  # flip to start→end
-    return solve_path[::-1]  # return the path from start to end
-
-
-def printGrid3():
-    print("Top layer:")
-    for i in range(len(grid_tiles)):
-        for j in range(len(grid_tiles[i])):
-            w = grid_tiles[i][j].a_star_weight[0]
-            print(f"{w:02d}" if w is not None else "@@", end=" ")
-        print("")
-    print("")
-
-    print("Bottom layer:")
-    for i in range(len(grid_tiles)):
-        for j in range(len(grid_tiles[i])):
-            w = grid_tiles[i][j].a_star_weight[1]  # fixed check
-            print(f"{w:02d}" if w is not None else "@@", end=" ")
-        print("")
+    bfs_layer(1)  # Top
+    bfs_layer(2)  # Bottom
 
 
+def printGrid2():
+    """Print Top (1) and Bottom (2) layers once."""
+    if not grid_tiles or not grid_tiles[0]:
+        print("(empty grid)"); return
+    H = len(grid_tiles); W = len(grid_tiles[0])
 
-def demo_build(panel: SliderPanel):
+    # reuse block check for display (derive from tile.objects only; wires from nets
+    # are already accounted for by aStar into the weights; showing blocks as '##'
+    # based on objects makes pads/vias obvious; cells blocked by net wires will show
+    # as '..' unless you also attach wire-objects to tiles)
+    def obj_kind(o):
+        k = getattr(o, "kind", None)
+        if k: return str(k).lower()
+        name = o.__class__.__name__.lower()
+        if "via" in name: return "via"
+        if "pad" in name: return "pad"
+        if "wire" in name or "net" in name: return "wire"
+        return "unknown"
+    def obj_layer_id(o):
+        lay = getattr(o, "layer", None)
+        if lay is None: return None
+        if isinstance(lay, int): return 1 if lay == 1 else (2 if lay == 2 else None)
+        s = str(lay).lower()
+        if s.startswith("t") or s == "1": return 1
+        if s.startswith("b") or s == "2": return 2
+        return None
+    def is_blocked_by_objects(x, y, lid):
+        for o in grid_tiles[y][x].objects:
+            k = obj_kind(o)
+            if k == "via": return True
+            if k in ("pad", "wire") and obj_layer_id(o) == lid:
+                return True
+        return False
+
+    def dump(lid, title):
+        print(f"\n=== {title} (layer {lid}) ===")
+        for y in (range(H)):
+            row = []
+            for x in range(W):
+                if is_blocked_by_objects(x, y, lid):
+                    row.append("##")
+                else:
+                    ws = grid_tiles[y][x].a_star_weight
+                    w = ws[lid] if ws and len(ws) > lid else None
+                    row.append(".." if w is None else f"{w:02d}")
+            print(" ".join(row))
+
+    dump(1, "Top")
+    dump(2, "Bottom")
     """
-    Example: build a few differently ranged sliders with 0.1 resolution.
-    Replace with your own creation code.
+    Print Top (1) and Bottom (2) layers. 
+      - blocked -> "##"
+      - None (unvisited) -> ".."
+      - else -> 2-digit weight
     """
-    panel.add_slider("Route Clearance",       0.0,  5.0,  2.0,  step=0.1)
-    panel.add_slider("Offset",   -10.0,  10.0,  0.0,  step=0.1)
-    panel.add_slider("Throttle",   0.0,   1.0,  0.5,  step=0.1)
-    panel.add_slider("Cutoff Hz",  5.0, 200.0, 50.0,  step=0.1)  # still 0.1 resolution
+    if not grid_tiles or not grid_tiles[0]:
+        print("(empty grid)")
+        return
+
+    H = len(grid_tiles)
+    W = len(grid_tiles[0])
+
+    def obj_kind(o):
+        k = getattr(o, "kind", None)
+        if k: return str(k).lower()
+        cname = o.__class__.__name__.lower()
+        if "via" in cname: return "via"
+        if "pad" in cname: return "pad"
+        if "wire" in cname or "net" in cname: return "wire"
+        return "unknown"
+
+    def obj_layer_id(o):
+        lay = getattr(o, "layer", None)
+        if lay is None:
+            return None
+        if isinstance(lay, int):
+            return 1 if lay == 1 else (2 if lay == 2 else None)
+        s = str(lay).lower()
+        if s.startswith("t"): return 1
+        if s.startswith("b"): return 2
+        if s == "1": return 1
+        if s == "2": return 2
+        return None
+
+    def is_blocked(x, y, layer_id):
+        for o in grid_tiles[y][x].objects:
+            k = obj_kind(o)
+            if k == "via":
+                return True
+            if k in ("pad", "wire") and obj_layer_id(o) == layer_id:
+                return True
+        return False
+
+    def dump_layer(layer_id, title):
+        print(f"\n=== {title} (layer {layer_id}) ===")
+        for y in (range(H)):  # top row first
+            row_str = []
+            for x in range(W):
+                if is_blocked(x, y, layer_id):
+                    row_str.append("##")
+                else:
+                    w = None
+                    ws = grid_tiles[y][x].a_star_weight
+                    if ws and len(ws) > layer_id:
+                        w = ws[layer_id]
+                    row_str.append(".." if w is None else f"{w:02d}")
+            print(" ".join(row_str))
+
+    dump_layer(1, "Top")
+    dump_layer(2, "Bottom")
+
 
 def approximate_gradient(component, pos, nets, delta=1e-6):
     x, y = pos
@@ -1023,7 +975,7 @@ def unit_vector(p1, p2):
         return (0, 0)
     return ((p2[0] - p1[0]) / dist, (p2[1] - p1[1]) / dist)
 
-def force_directed_placement(iterations=500, k_attract=1, k_repel=1000, max_disp=1.0):
+def force_directed_placement(iterations=1000, k_attract=0.1, k_repel=1000, max_disp=1.0):
     """
     components: list of components with .getPosition() returning (x, y), and .move(x, y)
     nets: list of nets, each net is a list of components connected
@@ -1319,7 +1271,6 @@ def optimise_board(area, buffer=1, max_iterations=20, tolerance=0.1):
             if height_improvement < tolerance:
                 print(f"Height improvement too small: {height_improvement:.2f}. Converged.")
                 converged = True
-                final_packer = packer  # Keep the last successful packing
             else:
                 current_area = (current_area[0], minimal_height * 0.95)
 
@@ -1331,171 +1282,64 @@ def optimise_board(area, buffer=1, max_iterations=20, tolerance=0.1):
         return
 
     # Update component positions for final packing
+
+    for comp in components:
+        print(f"Component began at {round(comp.getPosition()[0], 2), round(comp.getPosition()[1], 2)} with dimensions {comp.dimensions}")
+    
     used = []
     for comp in components:
-        print(f"Component begsn at {comp.getPosition()} with dimensions {comp.dimensions}")
-
-    for comp in components:
         for i, r in enumerate(final_packer[0]):
-            if (buffer * comp.dimensions[0] == r.width and
-                buffer * comp.dimensions[1] == r.height and
+            if (buffer * round(comp.dimensions[0], 2) == round(r.width, 2) and
+                buffer * round(comp.dimensions[1], 2) == round(r.height, 2) and
                 i not in used):
-                comp.move(r.x + r.width / 2, (r.y + r.height / 2))
+                comp.move(r.x + r.width / 2, r.y + r.height / 2)
                 used.append(i)
                 break
-            elif (buffer * comp.dimensions[1] == r.height and
-                  buffer * comp.dimensions[0] == r.width and
+            elif (buffer * round(comp.dimensions[1], 2) == round(r.height, 2) and
+                  buffer * round(comp.dimensions[0], 2) == round(r.width, 2) and
                   i not in used):
                 comp.rotate(90)
-                comp.move(r.x + r.width / 2,(r.y + r.height / 2))
+                comp.move(r.x + r.width / 2, r.y + r.height / 2)
                 used.append(i)
                 break
-
-    for component in components:
-        x,y = component.getPosition()
-        component.move(x,y-40)
-
     for comp in components:
         print(f"Component placed at {comp.getPosition()} with dimensions {comp.dimensions}")
-
     print(f"\nOptimization complete after {iteration} iterations")
     print(f"Final board size: {best_area}")
     print(f"Final minimal dimensions: {best_width:.2f} x {best_height:.2f}")
 
     # Visualize the final result
-    # visualise(final_packer, area, footprints, buffer, best_width, best_height)
+    visualise(final_packer, area, footprints, buffer, best_width, best_height)
 
 
-# ---- Worker that does the routing AFTER the button press ----
-class Worker(QObject):
-    progress = pyqtSignal(str)   # text lines to append to GUI log
-    finished = pyqtSignal(str)   # final message
 
-    def __init__(self, slider_values):
-        super().__init__()
-        self.slider_values = slider_values  # use if your routing needs them
-
-    def run(self):
-        try:
-            # 1) Read the DSN file
-            self.progress.emit("Reading .DSN file...")
-            # If you need to clear old state, do it here.
-            # e.g., nets.clear() or similar, depending on your codebase
-
-            # Make sure grid_tiles is available
-            global grid_tiles
-            grid_tiles = []  # reset / new grid
-
-            processDSNfile(f"DSN/{FILE_NAME}.dsn")
-            self.progress.emit("Successfully read .DSN file")
-
-            # placement here
-            # force_directed_placement(k_repel=100)
-            optimise_board((50,50))
-
-            for comp in components:
-                print(comp.getPosition())
-            # 2) Build occupancy grid
-            self.progress.emit("Building occupancy grid for pads...")
-            occupancyGridPads(grid_tiles)
+grid_tiles = []
+processDSNfile(f"DSN/{FILE_NAME}.dsn")
 
 
-            self.progress.emit("Updating occupancy grid for existing wire segments...")
-            occupancyGridUpdateWireSegment()
 
-            # Optional: show grid in console (redirected to GUI if desired)
-            # If printGrid() prints to stdout, you can keep it; here we just note it:
-            self.progress.emit("Initial grid ready.")
-            # printGrid()
+# components[1].rotate(180)
+optimise_board((50, 50))  # Start with a reasonable initial size
 
-            # 3) Route each net
-            total_nets = len(nets)
-            for net_idx, net in enumerate(nets, start=1):
-                pads = net.getPadsInNet()
-                if not pads or len(pads) < 2:
-                    self.progress.emit(f"Net '{net.name}': not enough pads to route.")
-                    continue
 
-                for i in range(len(pads) - 1):
-                    pad = pads[i]
-                    next_pad = pads[i + 1]
+# optimise_rotation()
+# simulated_annealing()
+force_directed_placement()
+# gradient_descent()
 
-                    # multiple both elements of pad tuple by 1000
-                    pad_mils = (int(pad.getPosition()[0] * 1000), int(pad.getPosition()[1] * 1000))
-                    next_pad_mils = (int(next_pad.getPosition()[0] * 1000), int(next_pad.getPosition()[1] * 1000))
 
-                    reset_astar_weights()
-                    path = aStar2(pad_mils, next_pad_mils, 1, 1, net, nets)
+# occupancyGridPads(grid_tiles)
 
-                    # make path a wire
-                    for j in range(len(path) - 1):
-                        start = path[j][:2]
-                        end = path[j + 1][:2]
-                        start = (start[0] * GRID_SPACING * 1000, -start[1] * GRID_SPACING * 1000)  # convert to mils
-                        end = (end[0] * GRID_SPACING * 1000, -end[1] * GRID_SPACING * 1000)      # convert to mils
-                        net.addWireSegment(start, end, 1)
+# nets[1].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
+#nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
+#nets[2].addVia((20*1000,-15*1000))
+# occupancyGridUpdateWireSegment()
 
-                    occupancyGridUpdateWireSegment()
-                    # printGrid()
+# printGrid()
+veryBasicRoute()
+# aStar((0, 0), (70*1000, -20*1000), nets)
+# printGrid2()
 
-                    # Write SES after each connection (as per your code)
-                    processSESfile(f"SES/{FILE_NAME}.ses")
 
-                    # This was your print; now goes to log:
-                    self.progress.emit(
-                        f"{i+1} / {len(pads)-1} connections done for net '{net.name}' "
-                        f"({net_idx}/{total_nets} nets)"
-                    )
 
-            self.finished.emit("Routing complete. SES updated.")
-        except Exception as e:
-            # Bubble up errors to the log as well
-            self.finished.emit(f"Routing aborted with error: {e!r}")
-
-# ---- Main wiring: start routing when Submit is clicked ----
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    w = SliderPanel()
-    demo_build(w)
-    w.show()
-
-    # Start worker when the Submit button is pressed
-    thread_holder = {"thread": None, "worker": None}  # keep references alive
-
-    def start_routing(slider_values_list):
-        # Optional: map slider list to named dict if you need names
-        named = w.get_named_values()
-        w.log_message(f"Starting routing with sliders: {named}")
-
-        # Guard against restarting while a job is running
-        if thread_holder["thread"] is not None:
-            w.log_message("A routing job is already running.")
-            return
-
-        thread = QThread()
-        worker = Worker(slider_values_list)
-        worker.moveToThread(thread)
-
-        # Wiring
-        thread.started.connect(worker.run)
-        worker.progress.connect(w.log_message)
-        worker.finished.connect(w.log_message)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        # Keep refs so they don’t get GC’d
-        thread_holder["thread"] = thread
-        thread_holder["worker"] = worker
-
-        def cleanup():
-            thread_holder["thread"] = None
-            thread_holder["worker"] = None
-        thread.finished.connect(cleanup)
-
-        thread.start()
-
-    # Hook the GUI button signal to start routing
-    w.valuesSubmitted.connect(start_routing)
-
-    sys.exit(app.exec_())
+processSESfile(f"SES/{FILE_NAME}.ses")
