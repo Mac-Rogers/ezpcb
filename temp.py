@@ -1193,30 +1193,32 @@ def visualise(packer, area, rectangles, buffer, minimal_width, minimal_height):
     plt.tight_layout()
     
     plt.show()
-def optimise_board(area, buffer=1, max_iterations=20, tolerance=0.1):
+
+def optimise_board(area, buffer=1, max_iterations=10, tolerance=0.1):
     """
-    Iteratively optimize board size by shrinking width first, then height, until packing fails or no significant improvement.
+    Iteratively optimize board size by using minimal dimensions from previous iteration
+    as new board size until no further improvement is possible.
     """
     footprints = []
     for comp in components:
         comp.setDimensions()
-        footprints.append((round(buffer * comp.dimensions[0], 2), round(buffer * comp.dimensions[1], 2)))
+        footprints.append((round(buffer*comp.dimensions[0],2), round(buffer*comp.dimensions[1], 2)))
 
     num_components = len(footprints)
     current_area = area
     iteration = 0
     final_packer = None
-    phase = "width"  # Start by shrinking width
-    best_area = area
-    best_width, best_height = area
-    converged = False
-
+    min_width = False
+    min_height = False
+    CONVERGENCE_FACTOR = 0.95
+    old_area = area
+    
     print(f"Starting optimization with initial board size: {current_area}")
-
-    while iteration < max_iterations and not converged:
-        print(f"\n--- Iteration {iteration + 1} ({phase}-minimization) ---")
+    
+    while iteration < max_iterations:
+        print(f"\n--- Iteration {iteration + 1} ---")
         print(f"Trying board size: {current_area}")
-
+        
         # Try packing with current area
         packer = newPacker()
         for r in footprints:
@@ -1225,91 +1227,68 @@ def optimise_board(area, buffer=1, max_iterations=20, tolerance=0.1):
         packer.pack()
 
         # Check if packing was successful
-        if not packer[0] or len(packer[0]) < num_components:
-            
-            print("Packing failed! Reverting to last best size and switching dimension.")
-            # Switch phase when failed
-            if phase == "width":
-                current_area = (best_width, best_height)
-                phase = "height"
-                # Reset iteration count for height shrink phase if desired
-            elif phase == "height":
-                converged = True
-            iteration += 1
+        print(num_components, len(packer[0]))
+        if not packer[0] or len(packer[0]) < num_components:  # No rectangles were packed
+            print("Packing failed! Reverting to previous size.")
+            current_area = old_area
+            if not min_width:
+                min_width = True
+            elif not min_height:
+                min_height = True
             continue
-
-        # Calculate minimal packed dimensions
-        minimal_width = max(rect.x + rect.width for rect in packer[0])
-        minimal_height = max(rect.y + rect.height for rect in packer[0])
-
+        
+        # Calculate minimal outside dimensions from packed rectangles
+        minimal_width = max(rect.x + rect.width for rect in packer[0]) if packer[0] else 0
+        minimal_height = max(rect.y + rect.height for rect in packer[0]) if packer[0] else 0
+        
         print(f"Packed successfully! Minimal dimensions: {minimal_width:.2f} x {minimal_height:.2f}")
-
-        # Set final_packer to the first successful packer if not set yet
-        if final_packer is None:
-            final_packer = packer
-            best_width, best_height = minimal_width, minimal_height
-            best_area = (best_width, best_height)
-
-        # Update the best result if improved
-        if minimal_width * minimal_height < best_width * best_height:
-            best_width, best_height = minimal_width, minimal_height
-            best_area = (best_width, best_height)
-            final_packer = packer
-
-        # Check convergence
+        
+        # Check if we made significant improvement
         width_improvement = current_area[0] - minimal_width
         height_improvement = current_area[1] - minimal_height
-
-        # Decide on next size or phase
-        if phase == "width":
-            if width_improvement < tolerance:
-                print(f"Width improvement too small: {width_improvement:.2f}. Switching to height minimization.")
-                phase = "height"
-            else:
-                current_area = (minimal_width * 0.95, current_area[1])
-        elif phase == "height":
-            if height_improvement < tolerance:
-                print(f"Height improvement too small: {height_improvement:.2f}. Converged.")
-                converged = True
-            else:
-                current_area = (current_area[0], minimal_height * 0.95)
-
+        
+        old_area = current_area
+        if width_improvement < tolerance and height_improvement < tolerance:
+            print(f"Converged! Improvement too small: {width_improvement:.2f} x {height_improvement:.2f}")
+            print(min_width, min_height)
+            # if not min_width:
+            #     current_area = (CONVERGENCE_FACTOR* minimal_width, minimal_height)
+            # elif not min_height:
+            #     current_area = (minimal_width, CONVERGENCE_FACTOR* minimal_height)
+            # else:
+            #     print(num_components, len(packer[0]))
+            break
+        else:
+            current_area = (minimal_width, minimal_height)
+        # Store current successful packing for visualization
+        final_packer = packer
+        final_area = current_area
+        final_minimal_width = minimal_width
+        final_minimal_height = minimal_height
+        
+        
         iteration += 1
 
-    # Check if we have a valid final_packer
-    if final_packer is None:
-        print("ERROR: No successful packing found! Cannot proceed.")
-        return
-
-    # Update component positions for final packing
-
-    for comp in components:
-        print(f"Component began at {round(comp.getPosition()[0], 2), round(comp.getPosition()[1], 2)} with dimensions {comp.dimensions}")
-    
+    # Update component positions for this iteration
     used = []
     for comp in components:
         for i, r in enumerate(final_packer[0]):
-            if (buffer * round(comp.dimensions[0], 2) == round(r.width, 2) and
-                buffer * round(comp.dimensions[1], 2) == round(r.height, 2) and
-                i not in used):
-                comp.move(r.x + r.width / 2, r.y + r.height / 2)
+            if (buffer*comp.dimensions[0] == r.width and buffer*comp.dimensions[1] == r.height and i not in used):
+                comp.move(r.x + r.width/2, r.y + r.height/2)
                 used.append(i)
                 break
-            elif (buffer * round(comp.dimensions[1], 2) == round(r.height, 2) and
-                  buffer * round(comp.dimensions[0], 2) == round(r.width, 2) and
-                  i not in used):
+            elif (buffer*comp.dimensions[0] == r.height and buffer*comp.dimensions[1] == r.width and i not in used):
                 comp.rotate(90)
-                comp.move(r.x + r.width / 2, r.y + r.height / 2)
+                comp.move(r.x + r.width/2, r.y + r.height/2)
                 used.append(i)
                 break
-    for comp in components:
-        print(f"Component placed at {comp.getPosition()} with dimensions {comp.dimensions}")
-    print(f"\nOptimization complete after {iteration} iterations")
-    print(f"Final board size: {best_area}")
-    print(f"Final minimal dimensions: {best_width:.2f} x {best_height:.2f}")
 
+    print(f"\nOptimization complete after {iteration} iterations")
+    print(f"Final board size: {final_area}")
+    print(f"Final minimal dimensions: {final_minimal_width:.2f} x {final_minimal_height:.2f}")
+    
     # Visualize the final result
-    visualise(final_packer, area, footprints, buffer, best_width, best_height)
+    # visualise(final_packer, area, footprints, buffer, final_minimal_width, final_minimal_height)
 
 
 

@@ -19,6 +19,7 @@ components = []
 
 GRID_SPACING = 2
 FILE_NAME = "test2"
+component_spacing = 0.5
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -371,7 +372,7 @@ class SliderPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Named Sliders (0.1 resolution) + Log")
+        self.setWindowTitle("EasyPCB")
         self.resize(560, 480)
 
         self._sliders = []
@@ -883,9 +884,9 @@ def demo_build(panel: SliderPanel):
     Replace with your own creation code.
     """
     panel.add_slider("Route Clearance",       0.0,  5.0,  2.0,  step=0.1)
-    panel.add_slider("Offset",   -10.0,  10.0,  0.0,  step=0.1)
-    panel.add_slider("Throttle",   0.0,   1.0,  0.5,  step=0.1)
-    panel.add_slider("Cutoff Hz",  5.0, 200.0, 50.0,  step=0.1)  # still 0.1 resolution
+    panel.add_slider("Board Size",   0,  10.0,  5,  step=0.1)
+    panel.add_slider("Component Spread",   0.0,   1.0,  0.5,  step=0.1)
+    panel.add_slider("Via Weighting",  0, 10, 1,  step=0.1)  
 
 def approximate_gradient(component, pos, nets, delta=1e-6):
     x, y = pos
@@ -1465,9 +1466,11 @@ if __name__ == "__main__":
 
     def start_routing(slider_values_list):
         global GRID_SPACING
+        global component_spacing
         # Optional: map slider list to named dict if you need names
         named = w.get_named_values()
         GRID_SPACING = named.get("Route Clearance", 2)  # default to 2 if not set
+        component_spacing = named.get("Component Spread", 0.5)
 
         w.log_message(f"Starting routing with sliders: {named}")
 
