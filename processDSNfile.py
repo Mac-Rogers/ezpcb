@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import random
 from collections import deque
 import sys
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
@@ -7,12 +8,17 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QPushButton, QPlainTextEdit, QSizePolicy, QSpacerItem
 )
+from rectpack import newPacker
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
 
 pads = []
 nets = []
 components = []
 
 GRID_SPACING = 2
+FILE_NAME = "test2"
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -119,6 +125,60 @@ class Net:
     def addOccupancyGridPosition(self, column, row):
         self.occupancy_grid_position.append((column, row))
 
+    def getComponents(self):
+        ans = []
+        for pad in self.pads:
+            for component in components:
+                if pad in component.pads:
+                    ans.append(component)
+        return ans
+
+    def getLength(self):
+        '''
+        Compute the minimal spanning tree length of all pads in this net using Prim's algorithm
+        Returns the total length of the MST
+        '''
+        if len(self.pads) <= 1:
+            return 0.0
+        
+        # Get all pad positions
+        positions = [pad.getPosition() for pad in self.pads]
+        n = len(positions)
+        
+        # Distance function (Euclidean distance)
+        def distance(pos1, pos2):
+            return math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+        
+        # Prim's algorithm
+        visited = [False] * n
+        min_edge = [float('inf')] * n
+        parent = [-1] * n
+        
+        # Start from the first pad
+        min_edge[0] = 0
+        total_length = 0.0
+        
+        for _ in range(n):
+            # Find minimum edge
+            u = -1
+            for v in range(n):
+                if not visited[v] and (u == -1 or min_edge[v] < min_edge[u]):
+                    u = v
+            
+            visited[u] = True
+            if parent[u] != -1:
+                total_length += distance(positions[u], positions[parent[u]])
+            
+            # Update minimum edges for adjacent vertices
+            for v in range(n):
+                if not visited[v]:
+                    edge_weight = distance(positions[u], positions[v])
+                    if edge_weight < min_edge[v]:
+                        min_edge[v] = edge_weight
+                        parent[v] = u
+        
+        return total_length
+
 
 class Component:
     def __init__(self, id):
@@ -134,6 +194,15 @@ class Component:
         # component can be rotated -> moves pads
         self.pads = [] # list of pad objects
         self.position = (0,0)
+        self.theta = 0
+        self.dimensions = None
+        self.id = id
+
+    def setTheta(self, theta):
+        self.optimal_theta = theta
+
+    def getTheta(self):
+        return self.theta
 
     def move(self, new_x, new_y):
         current_x, current_y = self.position
@@ -143,6 +212,48 @@ class Component:
             pad_x, pad_y = pad.getPosition()
             pad.setPosition(diff_x + pad_x, diff_y + pad_y)
 
+    def setDimensions(self):
+        if not self.pads:
+            self.dimensions = (0, 0)
+            return
+            
+        minx = float('inf')
+        maxx = float('-inf')
+        miny = float('inf')
+        maxy = float('-inf')
+        
+        for pad in self.pads:
+            pad_x, pad_y = pad.getPosition()
+            
+            if pad.shape == "circle":
+                radius = pad.outline / 2
+                minx = min(minx, pad_x - radius)
+                maxx = max(maxx, pad_x + radius)
+                miny = min(miny, pad_y - radius)
+                maxy = max(maxy, pad_y + radius)
+                
+            elif pad.shape == "polygon":
+                vertices = pad.getVertices()
+                for vertex_x, vertex_y in vertices:
+                    minx = min(minx, vertex_x)
+                    maxx = max(maxx, vertex_x)
+                    miny = min(miny, vertex_y)
+                    maxy = max(maxy, vertex_y)
+            else:
+                minx = min(minx, pad_x)
+                maxx = max(maxx, pad_x)
+                miny = min(miny, pad_y)
+                maxy = max(maxy, pad_y)
+        
+        # Calculate total dimensions (width, height)
+        width = round(maxx - minx, 2)
+        height = round(maxy - miny, 2)
+        self.dimensions = (width, height)
+        
+    def getDimensions(self):
+        if self.dimensions is None:
+            self.setDimensions()
+        return self.dimensions
 
     def rotate(self, angle):
         radians = math.radians(angle)
