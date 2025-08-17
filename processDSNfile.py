@@ -18,7 +18,7 @@ nets = []
 components = []
 
 GRID_SPACING = 2
-FILE_NAME = "basic1layerRoute"
+FILE_NAME = "test2"
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -1351,10 +1351,6 @@ def optimise_board(area, buffer=1, max_iterations=20, tolerance=0.1):
                 used.append(i)
                 break
 
-    for component in components:
-        x,y = component.getPosition()
-        component.move(x,y-40)
-
     for comp in components:
         print(f"Component placed at {comp.getPosition()} with dimensions {comp.dimensions}")
 
@@ -1390,15 +1386,19 @@ class Worker(QObject):
             self.progress.emit("Successfully read .DSN file")
 
             # placement here
-            # force_directed_placement(k_repel=100)
-            optimise_board((50,50))
+            # force_directed_placement(k_repel=1000)
+            optimise_board((20,20))
 
-            for comp in components:
-                print(comp.getPosition())
+            # print("component values")
+            # for comp in components:
+            #     for pad in comp.pads:
+            #         print(pad.ID,pad.getPosition())
+
             # 2) Build occupancy grid
             self.progress.emit("Building occupancy grid for pads...")
             occupancyGridPads(grid_tiles)
 
+            
 
             self.progress.emit("Updating occupancy grid for existing wire segments...")
             occupancyGridUpdateWireSegment()

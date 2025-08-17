@@ -12,7 +12,7 @@ nets = []
 components = []
 
 GRID_SPACING = 1.5
-FILE_NAME = "basic1layerRoute"
+FILE_NAME = "test2"
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -1319,12 +1319,12 @@ processDSNfile(f"DSN/{FILE_NAME}.dsn")
 
 
 # components[1].rotate(180)
-optimise_board((50, 50))  # Start with a reasonable initial size
+optimise_board((50, 10))  # Start with a reasonable initial size
 
 
 # optimise_rotation()
 # simulated_annealing()
-force_directed_placement()
+# force_directed_placement()
 # gradient_descent()
 
 
