@@ -18,7 +18,7 @@ nets = []
 components = []
 
 GRID_SPACING = 2
-FILE_NAME = "mosfetDriver"
+FILE_NAME = "basic1layerRoute"
 
 class Pad:
     def __init__(self, name, ID, position, shape, outline, layer):
@@ -1408,6 +1408,7 @@ class Worker(QObject):
                         net.addWireSegment(start, end, 1)
 
                     occupancyGridUpdateWireSegment()
+                    printGrid()
 
                     # Write SES after each connection (as per your code)
                     processSESfile(f"SES/{FILE_NAME}.ses")
