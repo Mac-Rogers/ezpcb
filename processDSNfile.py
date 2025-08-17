@@ -1,6 +1,12 @@
 import numpy as np
 import math
 from collections import deque
+import sys
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QSlider, QPushButton, QPlainTextEdit, QSizePolicy, QSpacerItem
+)
 
 pads = []
 nets = []
@@ -178,7 +184,138 @@ class GridTile:
     
     def addObject(self, object):
         self.objects.append(object)
-    
+
+
+
+class SliderRow(QWidget):
+    """A named horizontal slider with 0.1 resolution and live value label."""
+    def __init__(self, name: str, minimum: float = 0.0, maximum: float = 100.0,
+                 initial: float = None, step: float = 0.1, parent=None):
+        super().__init__(parent)
+        if step <= 0:
+            raise ValueError("step must be > 0")
+        if maximum < minimum:
+            minimum, maximum = maximum, minimum
+
+        self.name = name
+        self.step = step
+        self.scale = int(round(1.0 / step))  # e.g. 0.1 -> 10, 0.05 -> 20
+        self.min_float = float(minimum)
+        self.max_float = float(maximum)
+        if initial is None:
+            initial = (self.min_float + self.max_float) / 2.0
+        initial = max(self.min_float, min(self.max_float, initial))
+
+        # Widgets
+        self.name_lbl = QLabel(str(name))
+        self.name_lbl.setMinimumWidth(120)
+
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(self._to_int(self.min_float), self._to_int(self.max_float))
+        self.slider.setTickInterval(max(1, (self._to_int(self.max_float) - self._to_int(self.min_float)) // 10))
+        self.slider.setTickPosition(QSlider.TicksBelow)
+        self.slider.setSingleStep(1)  # 1 int step = `step` in float
+        self.slider.setPageStep(2)    # keyboard PgUp/PgDn = 2 steps (~0.2 if step=0.1)
+        self.slider.setValue(self._to_int(initial))
+
+        self.value_lbl = QLabel(self._fmt(initial))
+        self.value_lbl.setMinimumWidth(60)
+        self.value_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.slider.valueChanged.connect(self._on_value_changed)
+
+        row = QHBoxLayout(self)
+        row.addWidget(self.name_lbl)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.value_lbl)
+
+    def _to_int(self, x: float) -> int:
+        return int(round(x * self.scale))
+
+    def _to_float(self, i: int) -> float:
+        return i / float(self.scale)
+
+    def _fmt(self, x: float) -> str:
+        # show 1 decimal for 0.1 steps, but trim trailing zeros nicely
+        return f"{x:.3f}".rstrip('0').rstrip('.')  # supports other steps like 0.05 too
+
+    def _on_value_changed(self, i: int):
+        self.value_lbl.setText(self._fmt(self._to_float(i)))
+
+    # Public API
+    def value(self) -> float:
+        return self._to_float(self.slider.value())
+
+    def set_value(self, x: float):
+        x = max(self.min_float, min(self.max_float, x))
+        self.slider.setValue(self._to_int(x))
+
+
+class SliderPanel(QWidget):
+    """
+    Stack of named sliders (each with its own range), a Submit button, and a log.
+    Add sliders one-by-one with add_slider(...).
+    """
+    valuesSubmitted = pyqtSignal(list)  # emits list[float] on Submit
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Named Sliders (0.1 resolution) + Log")
+        self.resize(560, 480)
+
+        self._sliders = []
+
+        self.layout = QVBoxLayout(self)
+
+        # Spacer keeps sliders compact if many are added
+        self.layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+        # Submit button
+        self.submit_btn = QPushButton("Submit Values")
+        self.submit_btn.clicked.connect(self.on_submit)
+        self.layout.addWidget(self.submit_btn)
+
+        # Log
+        self.layout.addWidget(QLabel("Log"))
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setPlaceholderText("Messages will appear here...")
+        self.layout.addWidget(self.log, 1)
+
+        self.submit_btn.setAutoDefault(True)
+        self.submit_btn.setDefault(True)
+
+        self.log_message("Ready. Add sliders using add_slider(name, min, max, initial, step=0.1).")
+
+    # ---- Slider management ----
+    def add_slider(self, name: str, minimum: float, maximum: float, initial: float = None, step: float = 0.1):
+        row = SliderRow(name=name, minimum=minimum, maximum=maximum, initial=initial, step=step)
+        # Insert before the submit button/spacer section (i.e., near the top)
+        # We want all sliders stacked above the spacer; spacer is at index 0.
+        self.layout.insertWidget(len(self._sliders), row)
+        self._sliders.append(row)
+        self.log_message(f"Added slider '{name}' in range [{minimum}, {maximum}] step {step}.")
+        return row  # in case caller wants to keep a handle
+
+    def get_values(self) -> list:
+        return [row.value() for row in self._sliders]
+
+    def get_named_values(self) -> dict:
+        return {row.name: row.value() for row in self._sliders}
+
+    # ---- UI actions ----
+    def on_submit(self):
+        vals = self.get_named_values()
+        self.log_message(f"Submitted: {vals}")
+        print(vals)
+        # Emit ordered list of values matching slider order:
+        self.valuesSubmitted.emit(self.get_values())
+
+    def log_message(self, msg: str):
+        self.log.appendPlainText(msg)
+
+
+
 boundary = []
 
 def processDSNfile(file_name):
@@ -466,268 +603,6 @@ def printGrid():
             print(char, end=' ')
         print()
 
-def veryBasicRoute():
-
-    for net in nets:
-        pads_in_net = net.getPadsInNet()
-    
-        for i in range(len(pads_in_net) - 1):
-            #print(f"net: {net.name}, {pad.getPosition()}")
-            pad1_pos = pads_in_net[i].getPosition()
-            pad2_pos = pads_in_net[i + 1].getPosition()
-
-            pad1_pos = convertCoordinates(pad1_pos)
-            pad2_pos = convertCoordinates(pad2_pos)
-
-            #print(f"net: {net.name}, {pad1_pos} to {pad2_pos}")
-            net.addWireSegment(pad1_pos, pad2_pos, 1)
-
-
-def aStar(start, end, nets, current_net):
-    """
-    One call: fills BOTH layers' weights in grid_tiles[y][x].a_star_weight[1/2].
-    Blocks everything except features belonging to current_net.
-    Start cell is always allowed.
-    """
-    # --- mils -> cell coords ---
-    sx = int(start[0] / 1000 // GRID_SPACING)
-    sy = int(-start[1] / 1000 // GRID_SPACING)
-    ex = int(end[0]   / 1000 // GRID_SPACING)
-    ey = int(-end[1]  / 1000 // GRID_SPACING)
-    print("start,end (cells):", (sx, sy), (ex, ey))
-
-    if not grid_tiles or not grid_tiles[0]:
-        return
-
-    H = len(grid_tiles); W = len(grid_tiles[0])
-    def in_bounds(x, y): return 0 <= x < W and 0 <= y < H
-    if not in_bounds(sx, sy): return
-
-    # init weights (index 0 unused; 1=Top, 2=Bottom)
-    for y in range(H):
-        for x in range(W):
-            grid_tiles[y][x].a_star_weight = [None, None, None]
-
-    # --- helpers ---
-    def to_cell(pt):
-        return (int(pt[0] / 1000 // GRID_SPACING),
-                int(-pt[1] / 1000 // GRID_SPACING))
-
-    def bresenham_cells(c1, c2):
-        x1, y1 = c1; x2, y2 = c2
-        dx = abs(x2 - x1); dy = abs(y2 - y1)
-        sxn = 1 if x2 >= x1 else -1
-        syn = 1 if y2 >= y1 else -1
-        x, y = x1, y1
-        cells = []
-        if dx >= dy:
-            err = dx // 2
-            while x != x2:
-                cells.append((x, y))
-                err -= dy
-                if err < 0:
-                    y += syn; err += dx
-                x += sxn
-        else:
-            err = dy // 2
-            while y != y2:
-                cells.append((x, y))
-                err -= dx
-                if err < 0:
-                    x += sxn; err += dy
-                y += syn
-        cells.append((x2, y2))
-        return cells
-
-    def obj_kind(o):
-        k = getattr(o, "kind", None)
-        if k: return str(k).lower()
-        name = o.__class__.__name__.lower()
-        if "via" in name: return "via"
-        if "pad" in name: return "pad"
-        if "wire" in name or "net" in name: return "wire"
-        return "unknown"
-
-    def obj_layer_id(o):
-        lay = getattr(o, "layer", None)
-        if lay is None: return None
-        if isinstance(lay, int): return 1 if lay == 1 else (2 if lay == 2 else None)
-        s = str(lay).lower()
-        if s.startswith("t") or s == "1": return 1
-        if s.startswith("b") or s == "2": return 2
-        return None
-
-    # ---- SAME-NET membership checks (robust) ----
-    current_pads_set = set(getattr(current_net, "pads", []))  # identity match
-    current_pad_names = {getattr(p, "name", None) for p in current_pads_set if hasattr(p, "name")}
-    current_net_via_cells = set(to_cell(v) for v in getattr(current_net, "vias", []))
-
-    def is_same_net_pad(o):
-        if o in current_pads_set: return True
-        if hasattr(o, "net") and (o.net is current_net): return True
-        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
-        if hasattr(o, "name") and (o.name in current_pad_names): return True
-        return False
-
-    def is_same_net_wire(o):
-        if hasattr(o, "net") and (o.net is current_net): return True
-        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
-        return False
-
-    # ---- Build blocked sets from OTHER nets only ----
-    blocked = {1: set(), 2: set()}
-
-    for net in nets:
-        if net is current_net:
-            continue
-        for (p1, p2, layer_id) in net.wires:
-            lid = 1 if layer_id == 1 else 2
-            c1, c2 = to_cell(p1), to_cell(p2)
-            for cx, cy in bresenham_cells(c1, c2):
-                if in_bounds(cx, cy):
-                    blocked[lid].add((cx, cy))
-        for pos in net.vias:
-            cx, cy = to_cell(pos)
-            if in_bounds(cx, cy):
-                blocked[1].add((cx, cy))
-                blocked[2].add((cx, cy))
-
-    # ---- Also add tile.objects, but skip same-net features ----
-    for y in range(H):
-        for x in range(W):
-            for o in grid_tiles[y][x].objects:
-                k = obj_kind(o)
-                if k == "via":
-                    # allow current net vias by exact cell match
-                    if (x, y) in current_net_via_cells:
-                        continue
-                    blocked[1].add((x, y)); blocked[2].add((x, y))
-                elif k == "pad":
-                    if is_same_net_pad(o):  # NEW: allow same-net pads
-                        continue
-                    lid = obj_layer_id(o)
-                    if lid in (1, 2): blocked[lid].add((x, y))
-                elif k == "wire":
-                    if is_same_net_wire(o):  # NEW: allow same-net wires
-                        continue
-                    lid = obj_layer_id(o)
-                    if lid in (1, 2): blocked[lid].add((x, y))
-
-    # --- block check with explicit start-cell unblock ---
-    def is_blocked(x, y, lid):
-        if x == sx and y == sy:
-            return False          # NEW: never block the start cell
-        return (x, y) in blocked[lid]
-
-    # ---- BFS per layer (diagonals allowed) ----
-    nbrs = [(-1,-1),(0,-1),(1,-1),
-            (-1, 0),        (1, 0),
-            (-1, 1),(0, 1),(1, 1)]
-
-    def bfs_layer(layer_id):
-        grid_tiles[sy][sx].a_star_weight[layer_id] = 1
-        q = deque([(sx, sy)])
-        while q:
-            x, y = q.popleft()
-            w = grid_tiles[y][x].a_star_weight[layer_id]
-            for dx, dy in nbrs:
-                nx, ny = x + dx, y + dy
-                if not in_bounds(nx, ny): continue
-                if grid_tiles[ny][nx].a_star_weight[layer_id] is not None: continue
-                if is_blocked(nx, ny, layer_id): continue
-                grid_tiles[ny][nx].a_star_weight[layer_id] = w + 1
-                q.append((nx, ny))
-
-    bfs_layer(1)  # Top
-    bfs_layer(2)  # Bottom
-
-    print(f"end cell weight: {grid_tiles[ey][ex].a_star_weight[1]}, {grid_tiles[ey][ex].a_star_weight[2]}")
-
-def printGrid2(current_net=None):
-    """
-    Single print: shows Top(1) and Bottom(2).
-    Same-net pads/wires/vias are shown as passable (not "##") to match routing logic.
-    """
-    if not grid_tiles or not grid_tiles[0]:
-        print("(empty grid)"); return
-    H = len(grid_tiles); W = len(grid_tiles[0])
-
-    # same helpers as above (kept inline to stay "mostly in one function" style)
-    def obj_kind(o):
-        k = getattr(o, "kind", None)
-        if k: return str(k).lower()
-        name = o.__class__.__name__.lower()
-        if "via" in name: return "via"
-        if "pad" in name: return "pad"
-        if "wire" in name or "net" in name: return "wire"
-        return "unknown"
-    def obj_layer_id(o):
-        lay = getattr(o, "layer", None)
-        if lay is None: return None
-        if isinstance(lay, int): return 1 if lay == 1 else (2 if lay == 2 else None)
-        s = str(lay).lower()
-        if s.startswith("t") or s == "1": return 1
-        if s.startswith("b") or s == "2": return 2
-        return None
-
-    current_pads_set = set(getattr(current_net, "pads", [])) if current_net else set()
-    current_pad_names = {getattr(p, "name", None) for p in current_pads_set if hasattr(p, "name")}
-    current_net_via_cells = set()
-    if current_net:
-        for v in getattr(current_net, "vias", []):
-            cx = int(v[0] / 1000 // GRID_SPACING)
-            cy = int(-v[1] / 1000 // GRID_SPACING)
-            current_net_via_cells.add((cx, cy))
-
-    def is_same_net_pad(o):
-        if not current_net: return False
-        if o in current_pads_set: return True
-        if hasattr(o, "net") and (o.net is current_net): return True
-        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
-        if hasattr(o, "name") and (o.name in current_pad_names): return True
-        return False
-    def is_same_net_wire(o):
-        if not current_net: return False
-        if hasattr(o, "net") and (o.net is current_net): return True
-        if hasattr(o, "net_name") and (o.net_name == current_net.name): return True
-        return False
-
-    def is_blocked_visual(x, y, lid):
-        # visualize as blocked unless same-net feature
-        for o in grid_tiles[y][x].objects:
-            k = obj_kind(o)
-            if k == "via":
-                if (x, y) in current_net_via_cells:  # let own via show as passable
-                    continue
-                return True
-            if k == "pad":
-                if is_same_net_pad(o):  # show own pad as passable
-                    continue
-                if obj_layer_id(o) == lid:
-                    return True
-            if k == "wire":
-                if is_same_net_wire(o):  # show own wire as passable
-                    continue
-                if obj_layer_id(o) == lid:
-                    return True
-        return False
-
-    def dump(lid, title):
-        print(f"\n=== {title} (layer {lid}) ===")
-        for y in (range(H)):
-            row = []
-            for x in range(W):
-                if is_blocked_visual(x, y, lid):
-                    row.append("##")
-                else:
-                    ws = grid_tiles[y][x].a_star_weight
-                    w = ws[lid] if ws and len(ws) > lid else None
-                    row.append(".." if w is None else f"{w:02d}")
-            print(" ".join(row))
-
-    dump(1, "Top")
-    dump(2, "Bottom")
-    
 
 def getBlockerType(obj):
     # wires encoded as (start, end, layer)
@@ -744,160 +619,133 @@ def reset_astar_weights():
         for tile in row:
             tile.a_star_weight = [None, None]
 
-def _is_blocked(nx, ny, layer, net, nets):
-    """Return True if grid_tiles[ny][nx] is blocked on 'layer' for this net."""
-    tile = grid_tiles[ny][nx]
-    for obj in tile.objects:
-        obj_type, obj_layer = getBlockerType(obj)
-
-        # Objects on the same net never block
-        if obj_type == "pad":
-            for net_i in nets:
-                if obj in net_i.getPadsInNet():
-                    if net_i.name == net.name:
-                        return False
-                    break
-        elif obj_type == "wire":
-            for net_i in nets:
-                if obj in net_i.getWiresInNet():
-                    if net_i.name == net.name:
-                        return False
-                    break
-
-        # Pads/wires on this layer block
-        if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
-            return True
-    return False
-
-def _obj_net_name(obj, nets):
-    # Return the net name (str) for a pad/wire object, or None if none.
-    for net_i in nets:
-        if isinstance(obj, Pad):
-            if obj in net_i.getPadsInNet():
-                return net_i.name
-        else:
-            # wire tuple (start, end, layer)
-            if obj in net_i.getWiresInNet():
-                return net_i.name
-    return None
-
-def tile_status(x, y, layer, net, nets):
-    """
-    Classify what's on grid_tiles[y][x] at 'layer' relative to 'net'.
-    Returns dict flags:
-      same_pad, same_wire, foreign_pad, foreign_wire (all booleans)
-    """
-    flags = {"same_pad": False, "same_wire": False,
-             "foreign_pad": False, "foreign_wire": False}
-    for obj in grid_tiles[y][x].objects:
-        obj_type, obj_layer = getBlockerType(obj)
-        if obj_type not in ("pad", "wire"): 
-            continue
-        if (obj_layer - 1) != layer:
-            continue
-        obj_net = _obj_net_name(obj, nets)
-        if obj_type == "pad":
-            if obj_net == net.name:
-                flags["same_pad"] = True
-            else:
-                flags["foreign_pad"] = True
-        else:  # wire
-            if obj_net == net.name:
-                flags["same_wire"] = True
-            else:
-                flags["foreign_wire"] = True
-        # early exit if fully blocked
-        if flags["foreign_pad"] or flags["foreign_wire"]:
-            break
-    return flags
-
-def is_walkable(x, y, layer, net, nets):
-    f = tile_status(x, y, layer, net, nets)
-    # Block if any foreign object on this layer.
-    if f["foreign_pad"] or f["foreign_wire"]:
-        return False
-    # Allow own pad (even if a same-net wire also overlaps that pad).
-    if f["same_pad"]:
-        return True
-    # Do NOT pass through wires, even same net.
-    if f["same_wire"]:
-        return False
-    # Empty tile
-    return True
-
-
 def aStar2(start, end, start_layer, end_layer, net, nets):
+ 
     sx = int(start[0] / 1000 // GRID_SPACING)
     sy = int(-start[1] / 1000 // GRID_SPACING)
     ex = int(end[0] / 1000 // GRID_SPACING)
     ey = int(-end[1] / 1000 // GRID_SPACING)
-
-    # normalize layers to 0/1
-    start_layer = 0 if start_layer == 1 else 1
-    end_layer   = 0 if end_layer   == 1 else 1
-
-    # reset weights/parents
-    for row in grid_tiles:
-        for tile in row:
-            tile.a_star_weight = [None, None]
-            tile.a_star_parent = [None, None]
+    #print("start,end (cells):", (sx, sy), (ex, ey))
 
     q = deque()
-
-    # Enqueue start on layers that are walkable OR have our pad
+    # initialise start cell
+    #grid_tiles[sy][sx].a_star_weight[start_layer - 1] = 0
+    #q.append((sx, sy, start_layer - 1))
     for layer in (0, 1):
-        f = tile_status(sx, sy, layer, net, nets)
-        if is_walkable(sx, sy, layer, net, nets) or f["same_pad"]:
-            grid_tiles[sy][sx].a_star_weight[layer] = 0
-            q.append((sx, sy, layer))
+        grid_tiles[sy][sx].a_star_weight[layer] = 0
+        q.append((sx, sy, layer))
 
-    # ---- BFS fill: 4-connected only (no diagonal spread) ----
     while q:
         x, y, layer = q.popleft()
         cur_w = grid_tiles[y][x].a_star_weight[layer]
 
-        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),
+                    (-1,-1),(1,-1),(-1,1),(1,1)]:
             nx, ny = x + dx, y + dy
             if nx < 0 or ny < 0 or ny >= len(grid_tiles) or nx >= len(grid_tiles[0]):
                 continue
-            if grid_tiles[ny][nx].a_star_weight[layer] is not None:
-                continue
-            if not is_walkable(nx, ny, layer, net, nets):
+
+            tile = grid_tiles[ny][nx]
+            if tile.a_star_weight[layer] is not None:
+                continue  # already visited
+
+            # --- blocker check ---
+            blocked = False
+            for obj in tile.objects:
+                obj_type, obj_layer = getBlockerType(obj)
+
+                net_name = None
+                if obj_type == "pad":
+                    for net_i in nets:
+                        if obj in net_i.getPadsInNet():
+                            net_name = net_i.name
+                            break
+                elif obj_type == "wire":
+                    for net_i in nets:
+                        if obj in net_i.getWiresInNet():
+                            net_name = net_i.name
+                            break
+
+                if net_name == net.name:
+                    blocked = False
+                    break
+
+                if (obj_type in ("pad", "wire")) and (obj_layer - 1 == layer):
+                    blocked = True
+                    break
+
+            if blocked:
                 continue
 
-            grid_tiles[ny][nx].a_star_weight[layer] = cur_w + 1
-            grid_tiles[ny][nx].a_star_parent[layer] = (x, y, layer)
+            tile.a_star_weight[layer] = cur_w + 1
             q.append((nx, ny, layer))
 
-        # Via (layer switch in place) only if destination layer at (x,y) is walkable OR has our pad
+        # --- NEW: try switching layer at same (x, y) ---
         other_layer = 1 - layer
         if grid_tiles[y][x].a_star_weight[other_layer] is None:
-            f_other = tile_status(x, y, other_layer, net, nets)
-            if is_walkable(x, y, other_layer, net, nets) or f_other["same_pad"]:
+            # check blockers on the other layer at this same spot
+            blocked = False
+            for obj in grid_tiles[y][x].objects:
+                obj_type, obj_layer = getBlockerType(obj)
+
+                if obj_type in ("pad", "wire") and obj_layer - 1 == other_layer:
+                    blocked = True
+                    break
+
+            if not blocked:
                 grid_tiles[y][x].a_star_weight[other_layer] = cur_w + 1
-                grid_tiles[y][x].a_star_parent[other_layer] = (x, y, layer)
                 q.append((x, y, other_layer))
 
-    # Choose reachable end layer with smallest weight
-    end_candidates = [l for l in (end_layer, 1 - end_layer)
-                      if grid_tiles[ey][ex].a_star_weight[l] is not None]
-    if not end_candidates:
-        print("No path.")
-        return []
-    end_layer = min(end_candidates, key=lambda l: grid_tiles[ey][ex].a_star_weight[l])
+    #print("A* fill completing... Solving...")
+    #print(f"End cell weights: Top: {grid_tiles[ey][ex].a_star_weight[0]}, Bottom: {grid_tiles[ey][ex].a_star_weight[1]}")
+    # start at ex, ey
+    # find adjacent cells' values
+    # move new cell is the adjacent cell with the lowest weight
+    # repeat until 0
+    
+    # normalize layers to 0 (top) or 1 (bottom)
+    start_layer = 0 if start_layer == 1 else 1
+    end_layer   = 0 if end_layer == 1 else 1
 
-    # Backtrack by parents (no weight jumps)
-    path = []
-    cur = (ex, ey, end_layer)
-    while cur is not None:
-        path.append(list(cur))
-        x, y, layer = cur
-        if x == sx and y == sy and layer == start_layer:
+    current_tile = [ex, ey, end_layer]  # (x, y, layer)
+    solve_path = []
+
+    while True:
+        x, y, layer = current_tile
+        solve_path.append(current_tile)
+
+        current_weight = grid_tiles[y][x].a_star_weight[layer]
+        if current_weight is None:
+            print("No path (hit None).")
             break
-        cur = grid_tiles[y][x].a_star_parent[layer]
+        if current_weight == 0 and [x, y, layer] == [sx, sy, start_layer]:
+            break
 
-    path.reverse()
-    return path
+        # find adjacent candidates
+        adjacent = []
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                    (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < len(grid_tiles[0]) and 0 <= ny < len(grid_tiles):
+                w = grid_tiles[ny][nx].a_star_weight[layer]
+                if w is not None and w >= 0 and w < current_weight:
+                    adjacent.append([nx, ny, layer, w])
+
+        # check via (stay in place, switch layers)
+        other_layer = 1 - layer
+        ow = grid_tiles[y][x].a_star_weight[other_layer]
+        if ow is not None and ow >= 0 and ow < current_weight:
+            adjacent.append([x, y, other_layer, ow])
+
+        if not adjacent:
+            print(f"Stuck: no lower-weight neighbors at {current_tile}, traveled a distance of {len(solve_path)} with {int(np.sqrt((ex - x) ** 2 + (ey - y) ** 2))} to go.")
+            break
+
+        # pick best candidate
+        current_tile = min(adjacent, key=lambda pos: pos[3])[:3]
+
+    #print("A* path found:", solve_path[::-1])  # flip to start→end
+    return solve_path[::-1]  # return the path from start to end
 
 
 def printGrid3():
@@ -917,65 +765,142 @@ def printGrid3():
         print("")
 
 
-grid_tiles = []
-processDSNfile("DSN/basic1layerCrossover.dsn")
 
-vector_list = []
-for pad in components[0].pads: # only for components with 2 pads
-    padx, pady = pad.getPosition()
-    for net in nets:
-        net_pads = net.getPadsInNet()
-        if pad in net_pads: # find the net of the pad
-            pass
-           
-
-for i in range(len(nets)):
-    print(f"Net {i}: {nets[i].name}, Pads: {[pad.getName() for pad in nets[i].getPadsInNet()]}")
-
-occupancyGridPads(grid_tiles)
-
-#nets[2].addWireSegment((20*1000,0), (20*1000,-20*1000), 1)
-#nets[2].addWireSegment((0,0), (30*1000,-10*1000), 2)
-#nets[2].addVia((7*1000,-6*1000))
-occupancyGridUpdateWireSegment()
-
-printGrid()
-#veryBasicRoute()
-print("a star time")
-#aStar((70*1000, -8*1000), (54*1000, -8*1000), nets, nets[1])
-#printGrid2()
-
-#aStar2((5*1000, -10*1000), (54*1000, -8*1000), 1, 2, nets[3], nets)
-for net in nets:
-    for i in range(len(net.getPadsInNet()) - 1):
-        
-        pad = net.getPadsInNet()[i]
-        next_pad = net.getPadsInNet()[i + 1]
-
-        # multiple both elements of pad tuple by 1000
-        pad_mils = (int(pad.getPosition()[0] * 1000), int(pad.getPosition()[1] * 1000))
-        next_pad_mils = (int(next_pad.getPosition()[0] * 1000), int(next_pad.getPosition()[1] * 1000))
-        
-        print(f"Routing from {pad_mils} to {next_pad_mils}")
-        reset_astar_weights()
-        path = aStar2(pad_mils, next_pad_mils, 1, 1, net, nets)
-
-        # make path a wire
-        for j in range(len(path) - 1):
-            start = path[j][:2]
-            end = path[j + 1][:2]
-            start = (start[0] * GRID_SPACING * 1000, -start[1] * GRID_SPACING * 1000)  # convert to mils
-            end = (end[0] * GRID_SPACING * 1000, -end[1] * GRID_SPACING * 1000)  # convert to mils
-            #print(start, end)
-            net.addWireSegment(start, end, 1)
-
-        occupancyGridUpdateWireSegment()
-        printGrid()
-        printGrid3()
+def demo_build(panel: SliderPanel):
+    """
+    Example: build a few differently ranged sliders with 0.1 resolution.
+    Replace with your own creation code.
+    """
+    panel.add_slider("Route Clearance",       0.0,  5.0,  2.0,  step=0.1)
+    panel.add_slider("Offset",   -10.0,  10.0,  0.0,  step=0.1)
+    panel.add_slider("Throttle",   0.0,   1.0,  0.5,  step=0.1)
+    panel.add_slider("Cutoff Hz",  5.0, 200.0, 50.0,  step=0.1)  # still 0.1 resolution
 
 
-processSESfile("SES/basic1layerCrossover.ses")
 
-# print all nets
-for net in nets:
-    print(f"Net {net.name}, Pads: {[pad.getName() for pad in net.getPadsInNet()]}, pad locations: {[pad.getPosition() for pad in net.getPadsInNet()]}")
+
+# ---- Worker that does the routing AFTER the button press ----
+class Worker(QObject):
+    progress = pyqtSignal(str)   # text lines to append to GUI log
+    finished = pyqtSignal(str)   # final message
+
+    def __init__(self, slider_values):
+        super().__init__()
+        self.slider_values = slider_values  # use if your routing needs them
+
+    def run(self):
+        try:
+            # 1) Read the DSN file
+            self.progress.emit("Reading .DSN file...")
+            # If you need to clear old state, do it here.
+            # e.g., nets.clear() or similar, depending on your codebase
+
+            # Make sure grid_tiles is available
+            global grid_tiles
+            grid_tiles = []  # reset / new grid
+
+            processDSNfile("DSN/basic1layerCrossover.dsn")
+            self.progress.emit("Successfully read .DSN file")
+
+            # 2) Build occupancy grid
+            self.progress.emit("Building occupancy grid for pads...")
+            occupancyGridPads(grid_tiles)
+
+            self.progress.emit("Updating occupancy grid for existing wire segments...")
+            occupancyGridUpdateWireSegment()
+
+            # Optional: show grid in console (redirected to GUI if desired)
+            # If printGrid() prints to stdout, you can keep it; here we just note it:
+            self.progress.emit("Initial grid ready.")
+            # printGrid()
+
+            # 3) Route each net
+            total_nets = len(nets)
+            for net_idx, net in enumerate(nets, start=1):
+                pads = net.getPadsInNet()
+                if not pads or len(pads) < 2:
+                    self.progress.emit(f"Net '{net.name}': not enough pads to route.")
+                    continue
+
+                for i in range(len(pads) - 1):
+                    pad = pads[i]
+                    next_pad = pads[i + 1]
+
+                    # multiple both elements of pad tuple by 1000
+                    pad_mils = (int(pad.getPosition()[0] * 1000), int(pad.getPosition()[1] * 1000))
+                    next_pad_mils = (int(next_pad.getPosition()[0] * 1000), int(next_pad.getPosition()[1] * 1000))
+
+                    reset_astar_weights()
+                    path = aStar2(pad_mils, next_pad_mils, 1, 1, net, nets)
+
+                    # make path a wire
+                    for j in range(len(path) - 1):
+                        start = path[j][:2]
+                        end = path[j + 1][:2]
+                        start = (start[0] * GRID_SPACING * 1000, -start[1] * GRID_SPACING * 1000)  # convert to mils
+                        end = (end[0] * GRID_SPACING * 1000, -end[1] * GRID_SPACING * 1000)      # convert to mils
+                        net.addWireSegment(start, end, 1)
+
+                    occupancyGridUpdateWireSegment()
+
+                    # Write SES after each connection (as per your code)
+                    processSESfile("SES/basic1layerCrossover.ses")
+
+                    # This was your print; now goes to log:
+                    self.progress.emit(
+                        f"{i+1} / {len(pads)-1} connections done for net '{net.name}' "
+                        f"({net_idx}/{total_nets} nets)"
+                    )
+
+            self.finished.emit("Routing complete. SES updated.")
+        except Exception as e:
+            # Bubble up errors to the log as well
+            self.finished.emit(f"Routing aborted with error: {e!r}")
+
+# ---- Main wiring: start routing when Submit is clicked ----
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    w = SliderPanel()
+    demo_build(w)
+    w.show()
+
+    # Start worker when the Submit button is pressed
+    thread_holder = {"thread": None, "worker": None}  # keep references alive
+
+    def start_routing(slider_values_list):
+        # Optional: map slider list to named dict if you need names
+        named = w.get_named_values()
+        w.log_message(f"Starting routing with sliders: {named}")
+
+        # Guard against restarting while a job is running
+        if thread_holder["thread"] is not None:
+            w.log_message("A routing job is already running.")
+            return
+
+        thread = QThread()
+        worker = Worker(slider_values_list)
+        worker.moveToThread(thread)
+
+        # Wiring
+        thread.started.connect(worker.run)
+        worker.progress.connect(w.log_message)
+        worker.finished.connect(w.log_message)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        # Keep refs so they don’t get GC’d
+        thread_holder["thread"] = thread
+        thread_holder["worker"] = worker
+
+        def cleanup():
+            thread_holder["thread"] = None
+            thread_holder["worker"] = None
+        thread.finished.connect(cleanup)
+
+        thread.start()
+
+    # Hook the GUI button signal to start routing
+    w.valuesSubmitted.connect(start_routing)
+
+    sys.exit(app.exec_())
