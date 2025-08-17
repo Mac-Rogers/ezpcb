@@ -2,6 +2,10 @@ import numpy as np
 import math
 import random
 from collections import deque
+from rectpack import newPacker
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
 
 pads = []
 nets = []
@@ -183,6 +187,8 @@ class Component:
         self.pads = [] # list of pad objects
         self.position = (0,0)
         self.theta = 0
+        self.dimensions = None
+        self.id = id
 
     def setTheta(self, theta):
         self.optimal_theta = theta
@@ -198,6 +204,48 @@ class Component:
             pad_x, pad_y = pad.getPosition()
             pad.setPosition(diff_x + pad_x, diff_y + pad_y)
 
+    def setDimensions(self):
+        if not self.pads:
+            self.dimensions = (0, 0)
+            return
+            
+        minx = float('inf')
+        maxx = float('-inf')
+        miny = float('inf')
+        maxy = float('-inf')
+        
+        for pad in self.pads:
+            pad_x, pad_y = pad.getPosition()
+            
+            if pad.shape == "circle":
+                radius = pad.outline / 2
+                minx = min(minx, pad_x - radius)
+                maxx = max(maxx, pad_x + radius)
+                miny = min(miny, pad_y - radius)
+                maxy = max(maxy, pad_y + radius)
+                
+            elif pad.shape == "polygon":
+                vertices = pad.getVertices()
+                for vertex_x, vertex_y in vertices:
+                    minx = min(minx, vertex_x)
+                    maxx = max(maxx, vertex_x)
+                    miny = min(miny, vertex_y)
+                    maxy = max(maxy, vertex_y)
+            else:
+                minx = min(minx, pad_x)
+                maxx = max(maxx, pad_x)
+                miny = min(miny, pad_y)
+                maxy = max(maxy, pad_y)
+        
+        # Calculate total dimensions (width, height)
+        width = round(maxx - minx, 2)
+        height = round(maxy - miny, 2)
+        self.dimensions = (width, height)
+        
+    def getDimensions(self):
+        if self.dimensions is None:
+            self.setDimensions()
+        return self.dimensions
 
     def rotate(self, angle):
         radians = math.radians(angle)
@@ -1096,14 +1144,169 @@ def optimise_rotation():
     else:
         print(f"Too many components ({len(components)}) for exhaustive search")
 
+def visualise(packer, area, rectangles, buffer, minimal_width, minimal_height):
+    # Create visualization
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+
+    # Draw the bin boundary
+    bin_width, bin_height = area
+    bin_rect = patches.Rectangle((0, 0), bin_width, bin_height, 
+                                linewidth=2, edgecolor='black', facecolor='lightgray', alpha=0.3)
+    ax.add_patch(bin_rect)
+
+    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+
+    # Draw each packed rectangle
+    for i, rect in enumerate(packer[0]):
+        color = colors[i % len(colors)]
+        rectangle = patches.Rectangle((rect.x+(buffer-1)*rect.width/2, rect.y+(buffer-1)*rect.height/2), rect.width/buffer, rect.height/buffer,
+                                    linewidth=1, edgecolor='black', facecolor=color, alpha=0.7)
+        ax.add_patch(rectangle)
+        
+        # Add text label with rectangle info
+        ax.text(rect.x + rect.width/2, rect.y + rect.height/2, 
+                f'{rect.width}x{rect.height}', 
+                ha='center', va='center', fontsize=8, fontweight='bold')
+
+    # Set up the plot
+    ax.set_xlim(0, bin_width*1.3)
+    ax.set_ylim(0, bin_height*1.3)
+    ax.set_xlabel('Width')
+    ax.set_ylabel('Height')
+    ax.set_title(f'PCB layout optimisation\nBoard size: {bin_width}x{bin_height}')
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal')
+
+    
+    
+    minimal_rect = patches.Rectangle((0, 0), minimal_width*(1+(buffer-1)/2), minimal_height*(1+(buffer-1)/2),
+                                    linewidth=2, edgecolor='gray', facecolor='none', 
+                                    linestyle='--', alpha=0.8)
+    ax.add_patch(minimal_rect)
+
+    # Print packing efficiency
+    total_rect_area = sum(w * h for w, h in rectangles)
+    bin_area = bin_width * bin_height
+    efficiency = (total_rect_area / bin_area) * 100
+    
+    print(f"\nPacking efficiency: {efficiency:.1f}% ({total_rect_area}/{bin_area})")
+    print(f"Minimal outside dimensions: {minimal_width:.2f} x {minimal_height:.2f}")
+
+    plt.tight_layout()
+    
+    plt.show()
+
+
+    
+
+def optimise_board(area, buffer=1, max_iterations=1, tolerance=0.1):
+    """
+    Iteratively optimize board size by using minimal dimensions from previous iteration
+    as new board size until no further improvement is possible.
+    """
+    footprints = []
+    for comp in components:
+        comp.setDimensions()
+        footprints.append((round(buffer*comp.dimensions[0],2), round(buffer*comp.dimensions[1], 2)))
+
+    num_components = len(footprints)
+    current_area = area
+    iteration = 0
+    final_packer = None
+    min_width = False
+    min_height = False
+    CONVERGENCE_FACTOR = 0.95
+    old_area = area
+    
+    print(f"Starting optimization with initial board size: {current_area}")
+    
+    while iteration < max_iterations:
+        print(f"\n--- Iteration {iteration + 1} ---")
+        print(f"Trying board size: {current_area}")
+        
+        # Try packing with current area
+        packer = newPacker()
+        for r in footprints:
+            packer.add_rect(*r)
+        packer.add_bin(current_area[0], current_area[1])
+        packer.pack()
+
+        # Check if packing was successful
+        print(num_components, len(packer[0]))
+        if not packer[0] or len(packer[0]) < num_components:  # No rectangles were packed
+            print("Packing failed! Reverting to previous size.")
+            current_area = old_area
+            if not min_width:
+                min_width = True
+            elif not min_height:
+                min_height = True
+            continue
+        
+        # Calculate minimal outside dimensions from packed rectangles
+        minimal_width = max(rect.x + rect.width for rect in packer[0]) if packer[0] else 0
+        minimal_height = max(rect.y + rect.height for rect in packer[0]) if packer[0] else 0
+        
+        print(f"Packed successfully! Minimal dimensions: {minimal_width:.2f} x {minimal_height:.2f}")
+        
+        # Check if we made significant improvement
+        width_improvement = current_area[0] - minimal_width
+        height_improvement = current_area[1] - minimal_height
+        
+        old_area = current_area
+        if width_improvement < tolerance and height_improvement < tolerance:
+            print(f"Converged! Improvement too small: {width_improvement:.2f} x {height_improvement:.2f}")
+            print(min_width, min_height)
+            # if not min_width:
+            #     current_area = (CONVERGENCE_FACTOR* minimal_width, minimal_height)
+            # elif not min_height:
+            #     current_area = (minimal_width, CONVERGENCE_FACTOR* minimal_height)
+            # else:
+            #     print(num_components, len(packer[0]))
+            break
+        else:
+            current_area = (minimal_width, minimal_height)
+        # Store current successful packing for visualization
+        final_packer = packer
+        final_area = current_area
+        final_minimal_width = minimal_width
+        final_minimal_height = minimal_height
+        
+        
+        iteration += 1
+
+    # Update component positions for this iteration
+    used = []
+    for comp in components:
+        for i, r in enumerate(final_packer[0]):
+            if (buffer*comp.dimensions[0] == r.width and buffer*comp.dimensions[1] == r.height and i not in used):
+                comp.move(r.x + r.width/2, r.y + r.height/2)
+                used.append(i)
+                break
+            elif (buffer*comp.dimensions[0] == r.height and buffer*comp.dimensions[1] == r.width and i not in used):
+                comp.rotate(90)
+                comp.move(r.x + r.width/2, r.y + r.height/2)
+                used.append(i)
+                break
+
+    print(f"\nOptimization complete after {iteration} iterations")
+    print(f"Final board size: {final_area}")
+    print(f"Final minimal dimensions: {final_minimal_width:.2f} x {final_minimal_height:.2f}")
+    
+    # Visualize the final result
+    # visualise(final_packer, area, footprints, buffer, final_minimal_width, final_minimal_height)
 
 grid_tiles = []
 processDSNfile(f"DSN/{FILE_NAME}.dsn")
 
+
+
 # components[1].rotate(180)
-optimise_rotation()
+optimise_board((20, 10))  # Start with a reasonable initial size
+
+
+# optimise_rotation()
 # simulated_annealing()
-# force_directed_placement()
+force_directed_placement()
 # gradient_descent()
 
 
