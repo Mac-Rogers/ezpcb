@@ -18,6 +18,7 @@ nets = []
 components = []
 
 GRID_SPACING = 2
+FILE_NAME = "mosfetDriver"
 FILE_NAME = "test2"
 component_spacing = 0.5
 
@@ -1386,9 +1387,15 @@ class Worker(QObject):
             processDSNfile(f"DSN/{FILE_NAME}.dsn")
             self.progress.emit("Successfully read .DSN file")
 
+            for net in nets:
+                for pad in net.getPadsInNet():
+                    print(pad.getName(), pad.ID, pad.getPosition())
+
             # placement here
             # force_directed_placement(k_repel=1000)
             optimise_board((20,20))
+            # force_directed_placement(k_repel=100)
+            #optimise_board((50,50))
 
             # print("component values")
             # for comp in components:
