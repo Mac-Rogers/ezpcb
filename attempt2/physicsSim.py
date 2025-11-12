@@ -291,7 +291,7 @@ while running:
                         #dragged_node = node
                         # attach a spring between the mouse and the node
                         mouse_node = MouseNode((mouse_x/pxPerMeter, (screen_height - mouse_y)/pxPerMeter), (0,0), 0.001, "free", False)
-                        mouse_spring = Spring(mouse_node, node, 50, 0)
+                        mouse_spring = Spring(mouse_node, node, 100, 0)
                         mouse_damper = Damper(mouse_node, node, 5)
                         break
         elif event.type == pg.MOUSEBUTTONUP:

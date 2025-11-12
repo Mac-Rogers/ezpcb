@@ -1,6 +1,9 @@
 import numpy as np
 import pygame as pg
 import math
+import pymunk
+import pymunk.pygame_util
+from pymunk import Vec2d
 
 '''
 a design has many components
@@ -159,9 +162,9 @@ class Net:
                     other_compID = other_pad.getComponent()
                     other_comp = next((c for c in components if c.getID() == other_compID), None)
 
-                    if other_comp:
-                        Spring(comp.node, other_comp.node, 10)
-                        Damper(comp.node, other_comp.node, 1)
+                    #if other_comp:
+                    #    Spring(comp.node, other_comp.node, 10)
+                    #    Damper(comp.node, other_comp.node, 1)
 
 class Component:
     def __init__(self, id, comp_pads):
@@ -231,7 +234,7 @@ class Component:
         (x,y) = self.getPos()
         #print(x,y)
         
-        self.node = Node((x / pxPerMeter * 3, (screen_height - y * 3) / pxPerMeter), (0,0), 1, "free", True)
+        #self.node = Node((x / pxPerMeter * 3, (screen_height - y * 3) / pxPerMeter), (0,0), 1, "free", True)
 
 
 class Wire:
@@ -380,7 +383,6 @@ def processDSNfile(file_name):
             #    (boundary(path signal 0 0.2927 -141.7319 -0.0001 -141.439 -0.0001 -0.2927 0.2927 0.0001 208.368 0.0001 208.6609 -0.2927 208.6609 -141.439 208.368 -141.7319 0.2927 -141.7319 )
 
             words = line.split()
-            
             # remove the last word from the line
             words.pop()
             
@@ -389,9 +391,6 @@ def processDSNfile(file_name):
                 y = float(words[i+1])
                 boundary.append([x, y])
             print(f"Parsed boundary: {boundary}")
-
-    ######################### LIBRARY #########################
-
     # don't get confused with pins in network so stop before then
     network_line = 0
     for i in range(len(lines)):
@@ -553,35 +552,35 @@ def drawComponents():
             
             if pad.shape_type == "circle":
                 diameter = pad.shape[0][1]
-                pg.draw.circle(screen, color, (int(x * zoom + pan_x), int(y * zoom + pan_y)), int(diameter/2 * zoom), 0)
+                pg.draw.circle(screen, color, (int(x * zoom + dx), int(y * zoom + dy)), int(diameter/2 * zoom), 0)
             elif pad.shape_type == "polygon":
                 points = []
                 for vertex in pad.shape:
-                    vx = int((vertex[0] + pad.getPosition()[0]) * zoom + pan_x)
-                    vy = int((-vertex[1] - pad.getPosition()[1]) * zoom + pan_y)
+                    vx = int((vertex[0] + pad.getPosition()[0]) * zoom + dx)
+                    vy = int((-vertex[1] - pad.getPosition()[1]) * zoom + dy)
                     points.append((vx, vy))
                 pg.draw.polygon(screen, color, points, 0)
         
         p1, p2 = component.getBoundingBox()
         #print(p1, p2)
         if p1 is not None and p2 is not None:
-            x1 = int(p1[0] * zoom + pan_x)
-            y1 = int(p1[1] * zoom + pan_y)
-            x2 = int(p2[0] * zoom + pan_x)
-            y2 = int(p2[1] * zoom + pan_y)
+            x1 = int(p1[0] * zoom + dx)
+            y1 = int(p1[1] * zoom + dy)
+            x2 = int(p2[0] * zoom + dx)
+            y2 = int(p2[1] * zoom + dy)
             pg.draw.rect(screen, "yellow", (x1, y1, x2 - x1, y2 - y1), 1)
         
         #(cx, cy) = component.getPos()
         #if component.node is not None:
-        #    component.node.x = cx / pxPerMeter * zoom + pan_x / pxPerMeter
-        #    component.node.y = (screen_height - cy) / pxPerMeter * zoom - pan_y / pxPerMeter
+        #    component.node.x = cx / pxPerMeter * zoom + dx / pxPerMeter
+        #    component.node.y = (screen_height - cy) / pxPerMeter * zoom - dy / pxPerMeter
 
     # draw the boundary
     if len(boundary) > 1:
         boundary_points = []
         for point in boundary:
-            bx = int(zoom * point[0] + pan_x)
-            by = int(zoom * -point[1] + pan_y)
+            bx = int(zoom * point[0] + dx)
+            by = int(zoom * -point[1] + dy)
             boundary_points.append((bx, by))
         pg.draw.polygon(screen, "grey", boundary_points, 1)
 
@@ -603,389 +602,127 @@ def drawNets():
                     min_dist = dist
                     closest_point = p2
             if closest_point is not None:
-                x1 = int(p1[0] * zoom + pan_x)
-                y1 = int(-p1[1] * zoom + pan_y)
-                x2 = int(closest_point[0] * zoom + pan_x)
-                y2 = int(-closest_point[1] * zoom + pan_y)
+                x1 = int(p1[0] * zoom + dx)
+                y1 = int(-p1[1] * zoom + dy)
+                x2 = int(closest_point[0] * zoom + dx)
+                y2 = int(-closest_point[1] * zoom + dy)
                 pg.draw.line(screen, "white", (x1, y1), (x2, y2), 1)
 
-def getComponentAt(x, y):
+def getBodyAt(x, y, bodies):
+    for i, body in enumerate(bodies):
+        if body.position.x - 15 <= x <= body.position.x + 15 and \
+           body.position.y - 15 <= y <= body.position.y + 15:
+            return i, body
+    return None, None
+
+def toggleFixed(body):
+    # Toggle between static and dynamic. When making static, clear velocities
+    # and ensure the position/angle are finite to avoid NaNs later.
+    if body.body_type == pymunk.Body.STATIC:
+        body.body_type = pymunk.Body.DYNAMIC
+    else:
+        # stop motion and make static
+        try:
+            body.velocity = (0.0, 0.0)
+            body.angular_velocity = 0.0
+        except Exception:
+            pass
+
+        body.body_type = pymunk.Body.STATIC
+
+        # Ensure position is finite before rounding; if not, clamp to 0
+        px = body.position.x
+        py = body.position.y
+        if not (math.isfinite(px) and math.isfinite(py)):
+            px, py = 0.0, 0.0
+
+        # round position to nearest integer
+        body.position = Vec2d(round(px), round(py))
+
+        # round angle to nearest multiple of 90 degrees (ensure finite)
+        ang = body.angle
+        if not math.isfinite(ang):
+            ang = 0.0
+        body.angle = round(ang / (math.pi / 2)) * (math.pi / 2)
+
+
+def addPhysicsObjects(space):
+    bodies = []
+    traces = []
+    component_to_body = {}  # map component id to physics body
+    component_centers = {}
+
+    # create one physics body per component and remember its center
     for component in components:
         p1, p2 = component.getBoundingBox()
-        if p1 is not None and p2 is not None:
-            x1 = int(p1[0] * zoom + pan_x)
-            y1 = int(p1[1] * zoom + pan_y)
-            x2 = int(p2[0] * zoom + pan_x)
-            y2 = int(p2[1] * zoom + pan_y)
-            if x1 <= x <= x2 and y1 <= y <= y2:
-                return component
-    return None
-
-
-
-
-########## PHYSICS SIMULATION ##########
-dt = 0.005 #s
-pxPerMeter = 20
-g=0
-
-
-def collisionHandler(node, walls):
-    point = node.getPos()
-    velocity = np.array(node.getVel())
-
-    for wall in walls:
-        # Wall endpoints
-        A = np.array([wall.start_x, wall.start_y])
-        B = np.array([wall.end_x, wall.end_y])
-        AB = B - A
-        AB_length = np.linalg.norm(AB)
-        if AB_length == 0:
-            continue
-
-        # Unit vector along wall
-        u = AB / AB_length
-
-        # Vector from A to point
-        AP = np.array(point) - A
-
-        # Project AP onto wall
-        t = np.dot(AP, u)
-        t_clamped = np.clip(t, 0, AB_length)
-        closest = A + u * t_clamped  # closest point on wall segment
-
-        # Normal vector
-        n = np.array([-u[1], u[0]])  # 90 deg CCW
-        n = n / np.linalg.norm(n)
-
-        # Distance from point to wall
-        delta = np.array(point) - closest
-        dist = np.dot(delta, n)
-
-        # Collision threshold
-        threshold = 0.2
-        if dist < threshold:
-            # --- 1. Positional Correction ---
-            correction = (threshold - dist) * n
-            node.x += correction[0]
-            node.y += correction[1]
-
-            # --- 2. Velocity Correction ---
-            v = velocity
-            vn = np.dot(v, n)  # component into wall
-
-            if vn < 0:  # only if moving into wall
-                vt = v - vn * n  # tangential velocity remains
-                vr = -vn * wall.coef_rest * n  # reflected normal component
-                node.updateVel(*(vt + vr))
-            else:
-                node.updateVel(*v)
-
-            return True  # collision handled
-
-    return False
-
-'''
-def componentCollisionHandler(node):
-    # check each corner of the bounding box for collision with any other component's bounding box
-    
-    # get the bounding box of the component attached to this node
-    component = next((c for c in components if c.node == node), None)
-
-    if component is not None:
-        for other in components:
-            if other == component:
-                continue
-            
-            # getBoundingBox returns (min_x, max_y), (max_x, min_y), so we need to convert to pygame.Rect
-            p1, p2 = component.getBoundingBox()
-            o1, o2 = other.getBoundingBox()
-            rect1 = pg.Rect(p1[0], p1[1], p2[0] - p1[0], p2[1] - p1[1])
-            rect2 = pg.Rect(o1[0], o1[1], o2[0] - o1[0], o2[1] - o1[1])
-            if rect1.colliderect(rect2):
-                #print("collision")
-                # simple collision response: move the node back along its velocity vector
-                v = np.array(node.getVel())
-                node.v_x -= v[0] * 1
-                node.v_y -= v[1] * 1
-    return False
-'''
-def componentCollisionHandler(node):
-    component = next((c for c in components if c.node == node), None)
-    if component is None:
-        return False
-
-    p1, p2 = component.getBoundingBox()
-    rect1 = pg.Rect(p1[0], p1[1], p2[0] - p1[0], p2[1] - p1[1])
-
-    for other in components:
-        if other == component:
-            continue
-
-        o1, o2 = other.getBoundingBox()
-        rect2 = pg.Rect(o1[0], o1[1], o2[0] - o1[0], o2[1] - o1[1])
-
-        if rect1.colliderect(rect2):
-            # Calculate overlap on both axes
-            overlap_x = min(rect1.right, rect2.right) - max(rect1.left, rect2.left)
-            overlap_y = min(rect1.bottom, rect2.bottom) - max(rect1.top, rect2.top)
-
-            # Prevent jitter: only apply if overlap is small (but not 0)
-            if overlap_x <= 0 or overlap_y <= 0:
-                continue
-
-            # Move along the axis of least penetration
-            if overlap_x < overlap_y:
-                direction = -1 if rect1.centerx > rect2.centerx else 1
-                correction = (direction * overlap_x * 0.05, 0)
-            else:
-                direction = -1 if rect1.centery > rect2.centery else 1
-                correction = (0, direction * overlap_y * 0.05)
-
-            node.x += correction[0]
-            node.y += correction[1]
-
-            # Zero only the velocity component into the object
-            if correction[0] != 0:
-                node.v_x = 0
-            if correction[1] != 0:
-                node.v_y = 0
-
-            return True
-
-    return False
-
-
-
-class Node:
-    def __init__(self, pos, vel, mass, constraint="free", collisions=True):
-        '''
-        pos = (x, y)
-        vel = (v_x, v_y)
-        mass = m
-        constraint:
-        - "fixed" -> cannot move
-        - "free"  -> can be moved by another object in any way
-        - "vert"  -> can only be moved vertically
-        - "hori"  -> can only be moved horizontally
-        collisions = True -> enables collision handler with walls
-        '''
-        self.object = object
-        self.x = pos[0]
-        self.y = pos[1]
-        self.v_x = vel[0]
-        self.v_y = vel[1]
-        self.a_x = 0
-        self.a_y = 0
-        self.mass = mass
-        self.constraint = constraint
-        self.collisions = collisions
-        self.objects = []
-
-        nodes.append(self)
-
-    def update(self):
-        self.step()
-
-        # move the component attached to this node
-        for component in components:
-            if component.node == self:
-                #print(self.x * pxPerMeter, component.node.getPos())
-                #component.move(self.x * pxPerMeter, -self.y * pxPerMeter)
-                component.move(self.v_x * dt , self.v_y * dt )
-                #component.move(self.x * pxPerMeter, screen_height - self.y * pxPerMeter)
+        width = p2[0] - p1[0]
+        height = p2[1] - p1[1]
+        mass = 1
+        moment = pymunk.moment_for_box(mass, (width, height))
+        body = pymunk.Body(mass, moment)
+        shape = pymunk.Poly.create_box(body, (width, height))
         
-        # move the node to the component position
-        for component in components:
-            if component.node == self:
-                (cx, cy) = component.getPos()
-                self.x = cx / pxPerMeter * 3
-                self.y = (screen_height - cy) / pxPerMeter * 3
+        space.add(body, shape)
 
-        #if self.collisions:
-        #    collisionHandler(self, walls)
-        componentCollisionHandler(self)
+        x, y = component.getPos()
+        body.position = Vec2d(x, y)
+        body.angle = 0
 
-        pg.draw.circle(screen, "red", (self.x * pxPerMeter, screen_height - self.y * pxPerMeter), 5)
-    
-    def getPos(self):
-        return self.x, self.y
-    
-    def getVel(self):
-        return self.v_x, self.v_y
+        bodies.append(body)
+        component_to_body[component.getID()] = body
+        component_centers[component.getID()] = Vec2d(x, y)
 
-    def getTotalForce(self):
-        # gravity from mass which is a property of the node
-        F_x = 0
-        F_y = self.mass * g
+    # For each net, create a spring for each unique pair of pads. The spring
+    # anchors are the pad local offsets relative to their component body so
+    # multiple pads on the same component attach at distinct positions.
+    for net in nets:
+        pads = net.getPads()
+        for i in range(len(pads)):
+            for j in range(i + 1, len(pads)):
+                pad1 = pads[i]
+                pad2 = pads[j]
 
-        # add other forces
-        for object in self.objects:
-            F_x += object.getForce(self)[0]
-            F_y += object.getForce(self)[1]
-        #print(F_x, F_y)
-        return F_x, F_y
-    
-    def updateVel(self, v_x, v_y):
-        self.v_x = v_x
-        self.v_y = v_y
+                comp_id1 = pad1.getComponent()
+                comp_id2 = pad2.getComponent()
 
-    def step(self):
-        F_x, F_y = self.getTotalForce()
+                # skip connecting pads that belong to the same component
+                if comp_id1 == comp_id2:
+                    continue
 
-        self.a_x = F_x / self.mass
-        self.a_y = F_y / self.mass
-        
-        self.v_x += self.a_x * dt
-        self.v_y += self.a_y * dt
+                body1 = component_to_body.get(comp_id1)
+                body2 = component_to_body.get(comp_id2)
+                if body1 is None or body2 is None:
+                    continue
 
-        if self.constraint == "fixed":
-            self.v_x = 0
-            self.v_y = 0
-        if self.constraint == "vert":
-            self.v_x = 0
-        if self.constraint == "hori":
-            self.v_y = 0
+                # Convert pad positions into the physics coordinate system
+                # used by bodies (pad Y is negated in drawing/physics elsewhere).
+                pad1_world = Vec2d(pad1.getPosition()[0], -pad1.getPosition()[1])
+                pad2_world = Vec2d(pad2.getPosition()[0], -pad2.getPosition()[1])
 
-        self.x += self.v_x * dt
-        self.y += self.v_y * dt
+                # anchors are local offsets from the body's position
+                anchor1 = pad1_world - component_centers[comp_id1]
+                anchor2 = pad2_world - component_centers[comp_id2]
 
-        return self.x, self.y
-    
-    def attachObject(self, object):
-        self.objects.append(object)
+                rest_length = 0#(pad1_world - pad2_world).length
+                stiffness = 10.0
+                damping = 5.0
 
-class Wall:
-    def __init__(self, start_pos, end_pos, coef_restitution=1):
-        self.start_x = start_pos[0]
-        self.start_y = start_pos[1]
-        self.end_x = end_pos[0]
-        self.end_y = end_pos[1]
-        self.coef_rest = coef_restitution
+                spring = pymunk.DampedSpring(body1, body2, anchor1, anchor2, rest_length, stiffness, damping)
+                space.add(spring)
+                traces.append(spring)
 
-        walls.append(self)
-    
-    def render(self):
-        pg.draw.line(screen, "blue", (self.start_x * pxPerMeter, screen_height - self.start_y * pxPerMeter), (self.end_x * pxPerMeter, screen_height - self.end_y * pxPerMeter), 5)
+    return bodies, traces
 
-class Spring:
-    def __init__(self, node1, node2, k, rest_length=0):
-        self.node1 = node1
-        self.node2 = node2
-        self.k = k
-        self.rest_length = rest_length
-        self.v_x = 0
-        self.v_y = 0
-        self.a_y = 0
-        self.y = 5
-
-        node1.attachObject(self)
-        node2.attachObject(self)
-
-        springs.append(self)
-    
-    def render(self):
-        pg.draw.line(screen, "yellow", (self.node1.getPos()[0] * pxPerMeter - 3, screen_height - self.node1.getPos()[1] * pxPerMeter), (self.node2.getPos()[0] * pxPerMeter - 3, screen_height - self.node2.getPos()[1] * pxPerMeter))
-    
-    def getForce(self, node):
-        pos1 = np.array(self.node1.getPos())
-        pos2 = np.array(self.node2.getPos())
-
-        r = pos2 - pos1
-        length = np.linalg.norm(r)
-        if length == 0:
-            return (0, 0)
-
-        # spring direction
-        direction = r / length
-
-        # assume zero rest length
-        force_magnitude = self.k * (length - self.rest_length)
-        force_vector = force_magnitude * direction
-
-        # apply force to the right node
-        if node == self.node1:
-            return force_vector  # Force on node1 due to node2
-        elif node == self.node2:
-            return -force_vector  # Newton’s 3rd law
-        else:
-            return (0, 0)
-        
-class Damper:
-    def __init__(self, node1, node2, c):
-        self.node1 = node1
-        self.node2 = node2
-        self.c = c
-        self.v_x = 0 
-        self.v_y = 0
-        self.a_y = 0
-        self.y = 5
-
-        node1.attachObject(self)
-        node2.attachObject(self)
-
-        dampers.append(self)
-    
-    def render(self):
-        pg.draw.line(screen, "green", (self.node1.getPos()[0] * pxPerMeter + 3, screen_height - self.node1.getPos()[1] * pxPerMeter), (self.node2.getPos()[0] * pxPerMeter + 3, screen_height - self.node2.getPos()[1] * pxPerMeter))
-    
-    def getForce(self, node):
-        vel1 = np.array(self.node1.getVel())
-        vel2 = np.array(self.node2.getVel())
-
-        v = vel2 - vel1
-        speed = np.linalg.norm(v)
-        if speed == 0:
-            return (0, 0)
-
-        # spring direction
-        direction = v / speed
-
-        # assume zero rest length
-        force_magnitude = self.c * speed
-        force_vector = force_magnitude * direction
-
-        # apply force to the right node
-        if node == self.node1:
-            return force_vector  # Force on node1 due to node2
-        elif node == self.node2:
-            return -force_vector  # Newton’s 3rd law
-        else:
-            return (0, 0)
-    
-class MouseNode(Node):
-    def step(self):
-        # Override to disable physics stepping for this node
-        return self.x, self.y
-
-nodes = []
-springs = []
-dampers = []
-walls = []
-members = []
-
-
-
-screen_width = 800
-screen_height = 600
-
-pan_x = 0
-pan_y = 0
-zoom = 3.0
-pan_draging = False
-dragging = False
-component_draging = False
-current_component = None
-mouse_x = 0
-mouse_y = 0
 
 if __name__ == "__main__":
     processDSNfile("DSN/mosfetDriver.dsn")
 
-    printStructure()
+    #printStructure()
 
     pg.init()
-    screen = pg.display.set_mode((screen_width, screen_height))
+    fps = 60
+    WIDTH, HEIGHT = 800, 600
+    screen = pg.display.set_mode((WIDTH, HEIGHT))
     clock = pg.time.Clock()
     running = True
 
@@ -996,109 +733,168 @@ if __name__ == "__main__":
         net.addSprings()
 
 
-    # pcb boundary -> physics walls
-    #wall1 = Wall((0,screen_height), (620 / pxPerMeter,screen_height), 0.5)
-    #wall2 = Wall((0,150 / pxPerMeter), (620 / pxPerMeter,150 / pxPerMeter), 0.5)
+    space = pymunk.Space()
+    space.gravity = 0, 0
+    space.sleep_time_threshold = 0.3
+
+    draw_options = pymunk.pygame_util.DrawOptions(screen)
+    pymunk.pygame_util.positive_y_is_up = False
+
+    total_time = 0
+    zoom = 1.0
+    is_dragging = False
+    is_component_dragging = False
+    offset_x, offset_y = 0, 0
+    offset_x_component, offset_y_component = 0, 0
+    selected_body = None
+    dx, dy = 0, 0
+    dx_component, dy_component = 0, 0
+    mouse_x, mouse_y = 0, 0
+    last_click_time = 0
+    double_click_threshold = 300  # milliseconds
+
+    bodies, traces = addPhysicsObjects(space)
+
+    # mouse drag state for left-click dragging
+    grabbed_body = None
+    grab_joint = None
+    grabbed_was_static = False
+
+    # kinematic body that follows the mouse for dragging
+    mouse_body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
+    space.add(mouse_body)
 
     while running:
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
 
-            # the following is for dragging:
             elif event.type == pg.MOUSEBUTTONDOWN:
-                
-                if event.button == 1:  # Left mouse button
-                    #component_draging = True
-                    #mouse_x, mouse_y = event.pos
-                    current_component = getComponentAt(mouse_x, mouse_y)
+                if event.button == 3:  # Right mouse button (pan)
+                    is_dragging = True
+                    offset_x = event.pos[0] - dx
+                    offset_y = event.pos[1] - dy
 
+                elif event.button == 1:  # Left mouse button (select/drag or double-click)
+                    current_time = pg.time.get_ticks()
                     mouse_x, mouse_y = event.pos
-                    for node in nodes:
-                        node_pos = node.getPos()
-                        '''dist = math.hypot(node_pos[0] * pxPerMeter - mouse_x, screen_height - node_pos[1] * pxPerMeter - mouse_y)
-                        if dist < 10:  # If the click is within 10 pixels of the node
-                            dragging = True
-                            #dragged_node = node
-                            # attach a spring between the mouse and the node
-                            mouse_node = MouseNode((mouse_x/pxPerMeter, (screen_height - mouse_y)/pxPerMeter), (0,0), 0.001, "free", False)
-                            mouse_spring = Spring(mouse_node, node, 100, 0)
-                            mouse_damper = Damper(mouse_node, node, 10)
-                            break'''
-                        # if the node belongs to the current component
-                        if current_component and node == current_component.node:
-                            dragging = True
-                            #dragged_node = node
-                            # attach a spring between the mouse and the node
-                            mouse_node = MouseNode((mouse_x/pxPerMeter, (screen_height - mouse_y)/pxPerMeter), (0,0), 0.001, "free", False)
-                            mouse_spring = Spring(mouse_node, node, 200, 0)
-                            mouse_damper = Damper(mouse_node, node, 10)
-                            break
+                    # convert to world coords used by bodies
+                    world_x = (mouse_x - dx) / zoom
+                    world_y = (mouse_y - dy) / zoom
+
+                    if current_time - last_click_time < double_click_threshold:
+                        # Double click detected -> toggle fixed state
+                        body_index, body = getBodyAt(world_x, world_y, bodies)
+                        if body is not None:
+                            toggleFixed(body)
+                    else:
+                        # start dragging (single click)
+                        body_index, body = getBodyAt(world_x, world_y, bodies)
+                        if body is not None:
+                            grabbed_body = body
+                            # if body is static, make it dynamic temporarily for dragging
+                            if grabbed_body.body_type == pymunk.Body.STATIC:
+                                grabbed_was_static = True
+                                grabbed_body.body_type = pymunk.Body.DYNAMIC
+                                # clear velocities
+                                try:
+                                    grabbed_body.velocity = (0.0, 0.0)
+                                    grabbed_body.angular_velocity = 0.0
+                                except Exception:
+                                    pass
+
+                            # position the kinematic mouse body and attach a pivot joint
+                            mouse_body.position = Vec2d(world_x, world_y)
+                            # anchor on grabbed body in local coordinates
+                            try:
+                                local_anchor = grabbed_body.world_to_local((world_x, world_y))
+                            except Exception:
+                                local_anchor = (0, 0)
+                            grab_joint = pymunk.PivotJoint(mouse_body, grabbed_body, (0, 0), local_anchor)
+                            grab_joint.max_force = 500000
+                            space.add(grab_joint)
+
+                    last_click_time = current_time
 
             elif event.type == pg.MOUSEBUTTONUP:
-                component_draging = False
-                current_component = None
-                dragging = False
-                if event.button == 1:  # Left mouse button
-                    component_draging = False
-                    current_component = None
-
-                    dragging = False
-                    #dragged_node = None
-                    if 'mouse_spring' in locals():
-                        springs.remove(mouse_spring)
-                        mouse_spring.node1.objects.remove(mouse_spring)
-                        mouse_spring.node2.objects.remove(mouse_spring)
-                        del mouse_spring
-                        nodes.remove(mouse_node)
-                        del mouse_node
-                    if 'mouse_damper' in locals():
-                        dampers.remove(mouse_damper)
-                        del mouse_damper
+                if event.button == 3:
+                    is_dragging = False
+                elif event.button == 1:
+                    # release any grabbed body
+                    if grab_joint is not None:
+                        try:
+                            space.remove(grab_joint)
+                        except Exception:
+                            pass
+                        grab_joint = None
+                    if grabbed_body is not None and grabbed_was_static:
+                        # restore to static if it was static before dragging
+                        grabbed_body.body_type = pymunk.Body.STATIC
+                        grabbed_was_static = False
+                    grabbed_body = None
 
             elif event.type == pg.MOUSEMOTION:
-                
-                if component_draging and current_component is not None:
-                    mouse_x, mouse_y = event.pos
-                    # Convert screen coordinates to world coordinates by accounting for zoom
-                    offset_x = (mouse_x - current_component.getPos()[0] * zoom - pan_x) / zoom
-                    offset_y = (-mouse_y + current_component.getPos()[1] * zoom + pan_y) / zoom
-                    current_component.move(offset_x, offset_y)
-                
-                if dragging and 'mouse_spring' in locals():
-                    mouse_x, mouse_y = event.pos
-                    new_x = mouse_x / pxPerMeter
-                    new_y = (screen_height - mouse_y) / pxPerMeter
-                    mouse_spring.node1.x = new_x
-                    mouse_spring.node1.y = new_y
-                
-            # scrolling to zoom:
+                mouse_x, mouse_y = event.pos
+                # update kinematic mouse body position in world coords
+                world_x = (mouse_x - dx) / zoom
+                world_y = (mouse_y - dy) / zoom
+                try:
+                    mouse_body.position = Vec2d(world_x, world_y)
+                except Exception:
+                    pass
+                if is_dragging:
+                    dx = event.pos[0] - offset_x
+                    dy = event.pos[1] - offset_y
+
             elif event.type == pg.MOUSEWHEEL:
+                mouse_x, mouse_y = pg.mouse.get_pos()
+                # Calculate world position before zoom
+                world_x_before = (dx - mouse_x) / zoom
+                world_y_before = (dy - mouse_y) / zoom
+                
+                # Apply zoom
                 if event.y > 0:  # scroll up
                     zoom *= 1.1
                 elif event.y < 0:  # scroll down
                     zoom /= 1.1
                 
+                # Calculate world position after zoom
+                world_x_after = (dx - mouse_x) / zoom
+                world_y_after = (dy - mouse_y) / zoom
+
+                # Adjust offset to keep world position under mouse
+                dx -= (world_x_after - world_x_before) * zoom
+                dy -= (world_y_after - world_y_before) * zoom
 
 
+        draw_options.transform = pymunk.Transform.scaling(zoom).translated(dx / zoom, dy / zoom)
 
+        # snap the bodies to rotate to nearest 90 degrees
+        for body in bodies:
+            angle = body.angle
+            nearest_90 = round(angle / (math.pi / 2)) * (math.pi / 2)
+            body.angle = nearest_90
+        
+
+
+        space.step(1.0 / fps)
+                
         screen.fill("black")
 
-        drawComponents()
-        drawNets()
+        space.debug_draw(draw_options)
 
+        for b in space.bodies:
+            # skip bodies with invalid positions to avoid ValueError in to_pygame
+            px = b.position.x
+            py = b.position.y
+            if not (math.isfinite(px) and math.isfinite(py)):
+                continue
+            p = pymunk.pygame_util.to_pygame(b.position, screen)
 
-        for node in nodes:
-            node.update()
-        
-        for spring in springs:
-            spring.render()
-        
-        for damper in dampers:
-            damper.render()
+        #drawComponents()
+        #drawNets()
 
-        for wall in walls:
-            wall.render()
 
         pg.display.flip()
-        clock.tick(60)
+        dt = clock.tick(fps)
+        total_time += dt / 1000.0
