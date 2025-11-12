@@ -3,7 +3,8 @@ import pygame as pg
 import math
 import pymunk
 import pymunk.pygame_util
-from pymunk import Vec2d
+from pymunk.pygame_util import to_pygame
+from pymunk import Vec2d, SpaceDebugDrawOptions as SDO
 
 '''
 a design has many components
@@ -534,6 +535,24 @@ def printStructure():
         for pad in net.getPads():
             print(f"    Pad {pad.getID()}: {pad.getPosition()}, on layers {pad.getLayers()}, in net {pad.getNet()}")
 
+import pymunk.pygame_util
+from pymunk.vec2d import Vec2d
+import pygame as pg
+
+class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
+    def __init__(self, surface):
+        super().__init__(surface)
+        # Define your own colors
+        self.color_box = (0, 200, 255)   # cyan boxes
+        self.color_spring = (255, 255, 255)  # white lines
+        self.color_outline = (255, 255, 255)
+
+    def draw_polygon(self, verts, radius, outline_color, fill_color):
+        # Recolor boxes (polygons)
+        ps = [pymunk.pygame_util.to_pygame(v, self.surface) for v in verts]
+        #pg.draw.polygon(self.surface, self.color_box, ps, 10)
+        pg.draw.polygon(self.surface, self.color_outline, ps, 3)
+
 
 def drawComponents():
     for component in components:
@@ -569,11 +588,6 @@ def drawComponents():
             x2 = int(p2[0] * zoom + dx)
             y2 = int(p2[1] * zoom + dy)
             pg.draw.rect(screen, "yellow", (x1, y1, x2 - x1, y2 - y1), 1)
-        
-        #(cx, cy) = component.getPos()
-        #if component.node is not None:
-        #    component.node.x = cx / pxPerMeter * zoom + dx / pxPerMeter
-        #    component.node.y = (screen_height - cy) / pxPerMeter * zoom - dy / pxPerMeter
 
     # draw the boundary
     if len(boundary) > 1:
@@ -615,35 +629,6 @@ def getBodyAt(x, y, bodies):
             return i, body
     return None, None
 
-def toggleFixed(body):
-    # Toggle between static and dynamic. When making static, clear velocities
-    # and ensure the position/angle are finite to avoid NaNs later.
-    if body.body_type == pymunk.Body.STATIC:
-        body.body_type = pymunk.Body.DYNAMIC
-    else:
-        # stop motion and make static
-        try:
-            body.velocity = (0.0, 0.0)
-            body.angular_velocity = 0.0
-        except Exception:
-            pass
-
-        body.body_type = pymunk.Body.STATIC
-
-        # Ensure position is finite before rounding; if not, clamp to 0
-        px = body.position.x
-        py = body.position.y
-        if not (math.isfinite(px) and math.isfinite(py)):
-            px, py = 0.0, 0.0
-
-        # round position to nearest integer
-        body.position = Vec2d(round(px), round(py))
-
-        # round angle to nearest multiple of 90 degrees (ensure finite)
-        ang = body.angle
-        if not math.isfinite(ang):
-            ang = 0.0
-        body.angle = round(ang / (math.pi / 2)) * (math.pi / 2)
 
 
 def addPhysicsObjects(space):
@@ -661,7 +646,6 @@ def addPhysicsObjects(space):
         moment = pymunk.moment_for_box(mass, (width, height))
         body = pymunk.Body(mass, moment)
         shape = pymunk.Poly.create_box(body, (width, height))
-        
         space.add(body, shape)
 
         x, y = component.getPos()
@@ -711,7 +695,8 @@ def addPhysicsObjects(space):
                 space.add(spring)
                 traces.append(spring)
 
-    return bodies, traces
+    return bodies, traces, component_to_body
+
 
 
 if __name__ == "__main__":
@@ -736,8 +721,11 @@ if __name__ == "__main__":
     space = pymunk.Space()
     space.gravity = 0, 0
     space.sleep_time_threshold = 0.3
+    space.damping = 0.1
 
-    draw_options = pymunk.pygame_util.DrawOptions(screen)
+    #draw_options = pymunk.pygame_util.DrawOptions(screen)
+    draw_options = CustomDrawOptions(screen)
+    draw_options.flags &= ~SDO.DRAW_CONSTRAINTS
     pymunk.pygame_util.positive_y_is_up = False
 
     total_time = 0
@@ -747,13 +735,15 @@ if __name__ == "__main__":
     offset_x, offset_y = 0, 0
     offset_x_component, offset_y_component = 0, 0
     selected_body = None
+    disable_body_while_dragging = None
     dx, dy = 0, 0
     dx_component, dy_component = 0, 0
     mouse_x, mouse_y = 0, 0
     last_click_time = 0
     double_click_threshold = 300  # milliseconds
+    static_bodies = []
 
-    bodies, traces = addPhysicsObjects(space)
+    bodies, traces, component_to_body = addPhysicsObjects(space)
 
     # mouse drag state for left-click dragging
     grabbed_body = None
@@ -785,23 +775,25 @@ if __name__ == "__main__":
                     if current_time - last_click_time < double_click_threshold:
                         # Double click detected -> toggle fixed state
                         body_index, body = getBodyAt(world_x, world_y, bodies)
-                        if body is not None:
-                            toggleFixed(body)
+                        if body is not None and body not in static_bodies:
+                            #toggleFixed(body)
+                            static_bodies.append(body)
+                            body.mass = 1000000
+                            body.moment = 1000000
+                        elif body is not None and body in static_bodies:
+                            static_bodies.remove(body)
+                            body.mass = 1
+                            body.moment = pymunk.moment_for_box(body.mass, (10, 10))
                     else:
                         # start dragging (single click)
                         body_index, body = getBodyAt(world_x, world_y, bodies)
                         if body is not None:
                             grabbed_body = body
+
                             # if body is static, make it dynamic temporarily for dragging
-                            if grabbed_body.body_type == pymunk.Body.STATIC:
-                                grabbed_was_static = True
-                                grabbed_body.body_type = pymunk.Body.DYNAMIC
-                                # clear velocities
-                                try:
-                                    grabbed_body.velocity = (0.0, 0.0)
-                                    grabbed_body.angular_velocity = 0.0
-                                except Exception:
-                                    pass
+                            if body in static_bodies:
+                                body.mass = 1
+                                disable_body_while_dragging = body
 
                             # position the kinematic mouse body and attach a pivot joint
                             mouse_body.position = Vec2d(world_x, world_y)
@@ -827,10 +819,9 @@ if __name__ == "__main__":
                         except Exception:
                             pass
                         grab_joint = None
-                    if grabbed_body is not None and grabbed_was_static:
-                        # restore to static if it was static before dragging
-                        grabbed_body.body_type = pymunk.Body.STATIC
-                        grabbed_was_static = False
+                    if grabbed_body in static_bodies:
+                        # restore static state
+                        disable_body_while_dragging = None
                     grabbed_body = None
 
             elif event.type == pg.MOUSEMOTION:
@@ -869,31 +860,40 @@ if __name__ == "__main__":
 
         draw_options.transform = pymunk.Transform.scaling(zoom).translated(dx / zoom, dy / zoom)
 
-        # snap the bodies to rotate to nearest 90 degrees
-        for body in bodies:
+        space.step(1.0 / fps)
+
+        for body in static_bodies:
+            if disable_body_while_dragging == body:
+                continue
+
+            body.mass = 1000000
+            body.moment = 1000000
+            body.velocity = (0.0, 0.0)
+            body.angular_velocity = 0.0
+            body.force = (0.0, 0.0)
+            body.torque = 0.0
+
             angle = body.angle
             nearest_90 = round(angle / (math.pi / 2)) * (math.pi / 2)
             body.angle = nearest_90
-        
-
-
-        space.step(1.0 / fps)
                 
         screen.fill("black")
 
         space.debug_draw(draw_options)
 
-        for b in space.bodies:
-            # skip bodies with invalid positions to avoid ValueError in to_pygame
-            px = b.position.x
-            py = b.position.y
-            if not (math.isfinite(px) and math.isfinite(py)):
-                continue
-            p = pymunk.pygame_util.to_pygame(b.position, screen)
-
-        #drawComponents()
-        #drawNets()
-
+     
+        for c in space.constraints:
+            if isinstance(c, pymunk.DampedSpring):
+                p11, p12 = c.a.local_to_world(c.anchor_a)
+                p21, p22 = c.b.local_to_world(c.anchor_b)
+                p11 = (p11) * zoom + dx
+                p12 = (p12) * zoom + dy
+                p21 = (p21) * zoom + dx
+                p22 = (p22) * zoom + dy
+                p1 = Vec2d(p11, p12)
+                p2 = Vec2d(p21, p22)
+                pg.draw.line(screen, (200, 0, 0), to_pygame(p1, screen), to_pygame(p2, screen), 2)
+   
 
         pg.display.flip()
         dt = clock.tick(fps)
