@@ -10,9 +10,8 @@ from pymunk.space_debug_draw_options import SpaceDebugColor
 
 '''
 TODO:
-- fix spring connections based on shortest distance
-- update the spring connections when components move
-- display pads
+- bottom layer component selective collisions
+- dynamically adjust ratlines
 '''
 
 '''
@@ -64,6 +63,11 @@ boundary = [] # list of [x,y] points defining the boundary polygon
 ########################## PARAMETERS ##########################
 BOARD_WIDTH = 5
 
+def rotate(x, y, theta):
+    x_rot = x * np.cos(theta) - y * np.sin(theta)
+    y_rot = x * np.sin(theta) + y * np.cos(theta)
+    return x_rot, y_rot
+
 class Pad:
     def __init__(self, id, name, position, shape_type, shape, component, net, layers):
         self.ID = int(id)
@@ -74,6 +78,13 @@ class Pad:
         self.component = component  # component object
         self.net = net  # net object
         self.layers = layers # [1, 2] 
+        # Keep an immutable copy of the original shape so rotations are
+        # applied relative to the original vertices (avoid cumulative rotation).
+        if shape is None:
+            self.original_shape = None
+        else:
+            # make a deep copy of the vertex list
+            self.original_shape = [list(v) for v in shape]
 
     def getID(self):
         return self.ID
@@ -93,8 +104,17 @@ class Pad:
     def getLayers(self):
         return self.layers
     
-    def updatePosition(self, newPosition):
+    def updatePosition(self, newPosition, theta):
         self.position = newPosition
+        # apply rotations
+        if self.shape_type == "polygon":
+            # rebuild the rotated shape from the original vertex positions
+            new_shape = []
+            for v in self.original_shape:
+                x, y = rotate(v[0], v[1], -theta)
+                new_shape.append([x, y])
+            self.shape = new_shape
+        
     
     def updateLayers(self, newLayers):
         self.layers = newLayers
@@ -102,6 +122,10 @@ class Pad:
     def setShape(self, newShape):
         # only used initially when reading in the DSN file
         self.shape = newShape
+        if newShape is None:
+            self.original_shape = None
+        else:
+            self.original_shape = [list(v) for v in newShape]
     
     def setShapeType(self, newShapeType):
         # only used initially when reading in the DSN file
@@ -181,6 +205,13 @@ class Component:
         self.id = id
         self.pads = comp_pads  # list of pad objects
         self.node = None  # physics node attached to the component
+        self.pads_offsets = {}  # map pad id to offset from component center
+        for pad in self.pads:
+            pad_pos = Vec2d(pad.getPosition()[0], -pad.getPosition()[1])
+            comp_pos = Vec2d(self.getPos()[0], self.getPos()[1])
+            offset = pad_pos - comp_pos
+            self.pads_offsets[pad.getID()] = Vec2d(offset.x, -offset.y)
+        print(f"comp pos: {self.getPos()}, pads offsets: {self.pads_offsets}")
 
     def getID(self):
         return self.id
@@ -225,11 +256,12 @@ class Component:
 
         return (min_x, -max_y), (max_x, -min_y)
 
-    def move(self, x, y):
+    def move(self, x, y, t):
         for pad in self.pads:
-            pos = pad.getPosition()
-            newPos = [pos[0] + x, pos[1] + y]
-            pad.updatePosition(newPos)
+            # rotate the pad_offsets by angle theta, then apply the shift of x and y
+            x_offset_rot = self.pads_offsets[pad.getID()].x * np.cos(-t) - self.pads_offsets[pad.getID()].y * np.sin(-t)
+            y_offset_rot = self.pads_offsets[pad.getID()].x * np.sin(-t) + self.pads_offsets[pad.getID()].y * np.cos(-t)
+            pad.updatePosition([x + x_offset_rot, y + y_offset_rot], t)
     
     def getPos(self):
         # position is the center of the bounding box
@@ -550,7 +582,7 @@ class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
     def __init__(self, surface):
         super().__init__(surface)
         self.color_outline        = (255, 255, 255)
-        self.color_outline_static = (150, 150, 150)
+        self.color_outline_static = (100, 100, 100)
 
     def color_for_shape(self, shape):
         """Return fill color based on the shape/body mass."""
@@ -558,18 +590,15 @@ class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
 
         if abs(mass - 1.0) < 1e-6:
             # “normal” boxes
-            return SpaceDebugColor(255, 255, 255, 255)  # cyan-ish
+            return SpaceDebugColor(255, 255, 0, 255)  # cyan-ish
         else:
-            return SpaceDebugColor(150, 150, 150, 255)  # gray
+            return SpaceDebugColor(100, 100, 100, 255)  # gray
 
     def draw_polygon(self, verts, radius, outline_color, fill_color):
         ps = [pymunk.pygame_util.to_pygame(v, self.surface) for v in verts]
 
         # use the fill_color chosen by color_for_shape()
-        pg.draw.polygon(self.surface, fill_color.as_int(), ps, 3)
-
-        # outline color you want
-        #pg.draw.polygon(self.surface, self.color_outline, ps, 3)
+        pg.draw.polygon(self.surface, fill_color.as_int(), ps, 1)
 
 
 def drawComponents():
@@ -651,6 +680,41 @@ def getBodyAt(x, y, bodies, shapes):
             return i, bodies[i]
     return None, None
 
+def drawPygameComponents():
+    # draw the boundary
+    if len(boundary) > 1:
+        boundary_points = []
+        for point in boundary:
+            bx = int(zoom * point[0] + dx)
+            by = int(zoom * -point[1] + dy)
+            boundary_points.append((bx, by))
+        pg.draw.polygon(screen, "blue", boundary_points, 1)
+    
+    for component in components:
+        for pad in component.getPads():
+            pos = pad.getPosition()
+            x = int(pos[0])
+            y = int(-pos[1])
+            if pad.getLayers() == [1]:  # only draw pads on layer 1
+                color = "red"
+            elif pad.getLayers() == [2]:  # only draw pads on layer 2
+                color = "blue"
+            elif 1 in pad.getLayers() and 2 in pad.getLayers():  # draw pads on both layers
+                color = "purple"
+            else:
+                color = "green"
+            
+            if pad.shape_type == "circle":
+                diameter = pad.shape[0][1]
+                pg.draw.circle(screen, color, (int(x * zoom + dx), int(y * zoom + dy)), int(diameter/2 * zoom), 0)
+            elif pad.shape_type == "polygon":
+                points = []
+                for vertex in pad.shape:
+                    vx = int((vertex[0] + pad.getPosition()[0]) * zoom + dx)
+                    vy = int((-vertex[1] - pad.getPosition()[1]) * zoom + dy)
+                    points.append((vx, vy))
+                pg.draw.polygon(screen, color, points, 0)
+
 
 
 def addPhysicsObjects(space):
@@ -658,6 +722,7 @@ def addPhysicsObjects(space):
     shapes = []
     traces = []
     component_to_body = {}  # map component id to physics body
+    pad_to_spring = {}  # map pad id to spring
     component_centers = {}
 
     # create one physics body per component and remember its center
@@ -683,7 +748,7 @@ def addPhysicsObjects(space):
     # create springs between pads in the same net
     for net in nets:
         points = net.getPoints() # points are [x,y] positions of pads and vias
-        print(points)
+        #print(points)
 
         # find the closest pair of points and connect them with a spring
         # then remove the first point and repeat until all points are connected
@@ -729,18 +794,15 @@ def addPhysicsObjects(space):
                 spring = pymunk.DampedSpring(body1, body2, anchor1, anchor2, rest_length, stiffness, damping)
                 space.add(spring)
                 traces.append(spring)
+                pad_to_spring[pad1.getID()] = spring
+                pad_to_spring[pad2.getID()] = spring
 
-
-
-
-    return bodies, shapes, traces, component_to_body
+    return bodies, shapes, traces, component_to_body, pad_to_spring
 
 
 
 if __name__ == "__main__":
     processDSNfile("DSN/mosfetDriver.dsn")
-
-    #printStructure()
 
     pg.init()
     fps = 60
@@ -748,13 +810,6 @@ if __name__ == "__main__":
     screen = pg.display.set_mode((WIDTH, HEIGHT))
     clock = pg.time.Clock()
     running = True
-
-    for component in components:
-        component.attachNode()
-    
-    for net in nets:
-        net.addSprings()
-
 
     space = pymunk.Space()
     space.gravity = 0, 0
@@ -767,7 +822,7 @@ if __name__ == "__main__":
     pymunk.pygame_util.positive_y_is_up = False
 
     total_time = 0
-    zoom = 1.0
+    zoom = 2.0
     is_dragging = False
     is_component_dragging = False
     offset_x, offset_y = 0, 0
@@ -781,7 +836,7 @@ if __name__ == "__main__":
     double_click_threshold = 300  # milliseconds
     static_bodies = []
 
-    bodies, shapes, traces, component_to_body = addPhysicsObjects(space)
+    bodies, shapes, traces, component_to_body, pad_to_spring = addPhysicsObjects(space)
 
     # mouse drag state for left-click dragging
     grabbed_body = None
@@ -914,11 +969,19 @@ if __name__ == "__main__":
             angle = body.angle
             nearest_90 = round(angle / (math.pi / 2)) * (math.pi / 2)
             body.angle = nearest_90
+        
+
+        for body in bodies:
+            # find the component that corresponds to this body
+            comp = next((c for c in components if component_to_body.get(c.getID()) == body), None)
+            if comp is not None:
+                comp.move(body.position.x, -body.position.y, body.angle)
                 
         screen.fill("black")
 
         space.debug_draw(draw_options)
 
+        drawPygameComponents()
      
         for c in space.constraints:
             if isinstance(c, pymunk.DampedSpring):
@@ -930,7 +993,7 @@ if __name__ == "__main__":
                 p22 = (p22) * zoom + dy
                 p1 = Vec2d(p11, p12)
                 p2 = Vec2d(p21, p22)
-                pg.draw.line(screen, (200, 0, 0), to_pygame(p1, screen), to_pygame(p2, screen), 2)
+                pg.draw.line(screen, (255, 255, 255), to_pygame(p1, screen), to_pygame(p2, screen), 2)
    
 
         pg.display.flip()
