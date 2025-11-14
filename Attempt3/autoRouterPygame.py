@@ -5,6 +5,15 @@ import pymunk
 import pymunk.pygame_util
 from pymunk.pygame_util import to_pygame
 from pymunk import Vec2d, SpaceDebugDrawOptions as SDO
+from pymunk.space_debug_draw_options import SpaceDebugColor
+
+
+'''
+TODO:
+- fix spring connections based on shortest distance
+- update the spring connections when components move
+- display pads
+'''
 
 '''
 a design has many components
@@ -535,23 +544,32 @@ def printStructure():
         for pad in net.getPads():
             print(f"    Pad {pad.getID()}: {pad.getPosition()}, on layers {pad.getLayers()}, in net {pad.getNet()}")
 
-import pymunk.pygame_util
-from pymunk.vec2d import Vec2d
-import pygame as pg
+
 
 class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
     def __init__(self, surface):
         super().__init__(surface)
-        # Define your own colors
-        self.color_box = (0, 200, 255)   # cyan boxes
-        self.color_spring = (255, 255, 255)  # white lines
-        self.color_outline = (255, 255, 255)
+        self.color_outline        = (255, 255, 255)
+        self.color_outline_static = (150, 150, 150)
+
+    def color_for_shape(self, shape):
+        """Return fill color based on the shape/body mass."""
+        mass = getattr(shape.body, "mass", 0.0)
+
+        if abs(mass - 1.0) < 1e-6:
+            # “normal” boxes
+            return SpaceDebugColor(255, 255, 255, 255)  # cyan-ish
+        else:
+            return SpaceDebugColor(150, 150, 150, 255)  # gray
 
     def draw_polygon(self, verts, radius, outline_color, fill_color):
-        # Recolor boxes (polygons)
         ps = [pymunk.pygame_util.to_pygame(v, self.surface) for v in verts]
-        #pg.draw.polygon(self.surface, self.color_box, ps, 10)
-        pg.draw.polygon(self.surface, self.color_outline, ps, 3)
+
+        # use the fill_color chosen by color_for_shape()
+        pg.draw.polygon(self.surface, fill_color.as_int(), ps, 3)
+
+        # outline color you want
+        #pg.draw.polygon(self.surface, self.color_outline, ps, 3)
 
 
 def drawComponents():
@@ -622,17 +640,22 @@ def drawNets():
                 y2 = int(-closest_point[1] * zoom + dy)
                 pg.draw.line(screen, "white", (x1, y1), (x2, y2), 1)
 
-def getBodyAt(x, y, bodies):
-    for i, body in enumerate(bodies):
-        if body.position.x - 15 <= x <= body.position.x + 15 and \
-           body.position.y - 15 <= y <= body.position.y + 15:
-            return i, body
+def getBodyAt(x, y, bodies, shapes):
+    for i in range(len(bodies)):
+        width = -(shapes[i].get_vertices()[2].x - shapes[i].get_vertices()[0].x)
+        height = shapes[i].get_vertices()[1].y - shapes[i].get_vertices()[0].y
+        size = min(width, height)
+
+        if bodies[i].position.x - size/2 <= x <= bodies[i].position.x + size/2 and \
+           bodies[i].position.y - size/2 <= y <= bodies[i].position.y + size/2:
+            return i, bodies[i]
     return None, None
 
 
 
 def addPhysicsObjects(space):
     bodies = []
+    shapes = []
     traces = []
     component_to_body = {}  # map component id to physics body
     component_centers = {}
@@ -653,23 +676,35 @@ def addPhysicsObjects(space):
         body.angle = 0
 
         bodies.append(body)
+        shapes.append(shape)
         component_to_body[component.getID()] = body
         component_centers[component.getID()] = Vec2d(x, y)
 
-    # For each net, create a spring for each unique pair of pads. The spring
-    # anchors are the pad local offsets relative to their component body so
-    # multiple pads on the same component attach at distinct positions.
+    # create springs between pads in the same net
     for net in nets:
-        pads = net.getPads()
-        for i in range(len(pads)):
-            for j in range(i + 1, len(pads)):
-                pad1 = pads[i]
-                pad2 = pads[j]
+        points = net.getPoints() # points are [x,y] positions of pads and vias
+        print(points)
 
+        # find the closest pair of points and connect them with a spring
+        # then remove the first point and repeat until all points are connected
+        for point in points:
+            dist = float('inf')
+            closest_point = None
+            for other_point in points:
+                if point == other_point:
+                    continue
+                d = np.sqrt((point[0] - other_point[0])**2 + (point[1] - other_point[1])**2)
+                if d < dist:
+                    dist = d
+                    closest_point = other_point
+            if closest_point is not None:
+                # find the components of the two points
+                pad1 = next((pad for pad in pads if pad.getPosition() == point), None)
+                pad2 = next((pad for pad in pads if pad.getPosition() == closest_point), None)
+                if pad1 is None or pad2 is None:
+                    continue
                 comp_id1 = pad1.getComponent()
                 comp_id2 = pad2.getComponent()
-
-                # skip connecting pads that belong to the same component
                 if comp_id1 == comp_id2:
                     continue
 
@@ -695,7 +730,10 @@ def addPhysicsObjects(space):
                 space.add(spring)
                 traces.append(spring)
 
-    return bodies, traces, component_to_body
+
+
+
+    return bodies, shapes, traces, component_to_body
 
 
 
@@ -743,7 +781,7 @@ if __name__ == "__main__":
     double_click_threshold = 300  # milliseconds
     static_bodies = []
 
-    bodies, traces, component_to_body = addPhysicsObjects(space)
+    bodies, shapes, traces, component_to_body = addPhysicsObjects(space)
 
     # mouse drag state for left-click dragging
     grabbed_body = None
@@ -774,7 +812,7 @@ if __name__ == "__main__":
 
                     if current_time - last_click_time < double_click_threshold:
                         # Double click detected -> toggle fixed state
-                        body_index, body = getBodyAt(world_x, world_y, bodies)
+                        body_index, body = getBodyAt(world_x, world_y, bodies, shapes)
                         if body is not None and body not in static_bodies:
                             #toggleFixed(body)
                             static_bodies.append(body)
@@ -786,7 +824,7 @@ if __name__ == "__main__":
                             body.moment = pymunk.moment_for_box(body.mass, (10, 10))
                     else:
                         # start dragging (single click)
-                        body_index, body = getBodyAt(world_x, world_y, bodies)
+                        body_index, body = getBodyAt(world_x, world_y, bodies, shapes)
                         if body is not None:
                             grabbed_body = body
 
