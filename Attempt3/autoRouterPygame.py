@@ -6,12 +6,16 @@ import pymunk.pygame_util
 from pymunk.pygame_util import to_pygame
 from pymunk import Vec2d, SpaceDebugDrawOptions as SDO
 from pymunk.space_debug_draw_options import SpaceDebugColor
+import matplotlib.pyplot as plt
+import cv2
 
 
 '''
 TODO:
 - bottom layer component selective collisions
-- dynamically adjust ratlines
+- dynamically adjust ratlines for minimum link length
+- count spring crossings
+- optimise for minimum crossings?
 '''
 
 '''
@@ -57,11 +61,13 @@ pads = []
 vias = []
 nets = []
 components = []
+wires = []
 
 boundary = [] # list of [x,y] points defining the boundary polygon
+layers = [] # contains 2D arrays of Pixel obj representing what occupies each pixel of each layer
 
 ########################## PARAMETERS ##########################
-BOARD_WIDTH = 5
+BOARD_WIDTH = 5 # offset around components when calculating bounding box
 
 def rotate(x, y, theta):
     x_rot = x * np.cos(theta) - y * np.sin(theta)
@@ -282,7 +288,7 @@ class Component:
 class Wire:
     def __init__(self, net, segments):
         self.net = net  # net object
-        self.segments = segments  # list of segments, each segment is [[x1,y1],[x2,y2]]
+        self.segments = segments  # list of segments, each segment is [[x1,y1],[x2,y2], layer, width]
     
     def getNet(self):
         return self.net
@@ -577,7 +583,6 @@ def printStructure():
             print(f"    Pad {pad.getID()}: {pad.getPosition()}, on layers {pad.getLayers()}, in net {pad.getNet()}")
 
 
-
 class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
     def __init__(self, surface):
         super().__init__(surface)
@@ -645,6 +650,7 @@ def drawComponents():
             boundary_points.append((bx, by))
         pg.draw.polygon(screen, "grey", boundary_points, 1)
 
+
 def drawNets():
     for net in nets:
         points = net.getPoints()
@@ -669,6 +675,7 @@ def drawNets():
                 y2 = int(-closest_point[1] * zoom + dy)
                 pg.draw.line(screen, "white", (x1, y1), (x2, y2), 1)
 
+
 def getBodyAt(x, y, bodies, shapes):
     for i in range(len(bodies)):
         width = -(shapes[i].get_vertices()[2].x - shapes[i].get_vertices()[0].x)
@@ -679,6 +686,7 @@ def getBodyAt(x, y, bodies, shapes):
            bodies[i].position.y - size/2 <= y <= bodies[i].position.y + size/2:
             return i, bodies[i]
     return None, None
+
 
 def drawPygameComponents():
     # draw the boundary
@@ -714,7 +722,6 @@ def drawPygameComponents():
                     vy = int((-vertex[1] - pad.getPosition()[1]) * zoom + dy)
                     points.append((vx, vy))
                 pg.draw.polygon(screen, color, points, 0)
-
 
 
 def addPhysicsObjects(space):
@@ -800,6 +807,242 @@ def addPhysicsObjects(space):
     return bodies, shapes, traces, component_to_body, pad_to_spring
 
 
+class Pixel:
+    def __init__(self, x, y):
+        '''
+        x, y: top left corner of the pixel
+        occupancy: None, "pad", "trace", "via", "air"
+        layer: 1 (top), 2 (bottom), 3 (below 1), 4 (above 2)... 0 (all)
+        '''
+        self.x = x
+        self.y = y
+                
+        self.data = []
+        for i in range(layers_needed):
+            self.data.append(None)
+    
+    def setLayerOccupancy(self, layer, occupancy_state):
+        self.data[layer - 1] = occupancy_state
+    
+    def getOccupancy(self):
+        return self.data
+        
+
+
+def populatePixels():
+    '''
+    Fills in the layers list with Pixel objects covering the entire board area.
+    Each Pixel object contains occupancy information for each layer.
+    '''
+    global board_width, board_height
+
+    # get the width and height of the board from the boundary
+    min_x = float('inf')
+    max_x = float('-inf')
+    min_y = float('inf')
+    max_y = float('-inf')
+    for point in boundary:
+        if point[0] < min_x:
+            min_x = point[0]
+        if point[0] > max_x:
+            max_x = point[0]
+        if point[1] < min_y:
+            min_y = point[1]
+        if point[1] > max_y:
+            max_y = point[1]
+    board_width = max_x - min_x
+    board_height = max_y - min_y
+    print(f"Board dimensions: {board_width} x {board_height}")
+
+
+    for y in range(int(board_height / PIXEL_SIZE)):
+        layers.append([])
+        for x in range(int(board_width / PIXEL_SIZE)):
+            pixel = Pixel(x * PIXEL_SIZE, y * PIXEL_SIZE)
+            for layer in range(layers_needed):
+                pixel.setLayerOccupancy(layer + 1, "None")  # default to None
+            layers[y].append(pixel)
+
+
+def updatePixelOccupancy():
+    '''
+    Update pixel object occupancy based on pad positions and shapes.
+    1. Reset all pixel occupancies to None.
+    2. Update occupancy based on pad shapes and positions.
+    '''
+
+    # reset all pixel occupancy to None
+    for y in range(len(layers)):
+        for x in range(len(layers[0])):
+            pixel = layers[y][x]
+            for layer in range(layers_needed):
+                pixel.setLayerOccupancy(layer + 1, "None")
+    
+    # reconstruct pixel occupancy based on pads
+    for pad in pads:
+        pos = pad.getPosition()
+        shape = pad.shape
+        shape_type = pad.shape_type
+        layers_of_pad = pad.getLayers()  
+
+        # change the occupancy of the pixel at the center of the pad
+        pixel_x = int(pos[0] / PIXEL_SIZE)
+        pixel_y = int(-pos[1] / PIXEL_SIZE) 
+
+        if shape_type == "circle":
+            diameter = shape[0][1]
+            radius_in_pixels = int((diameter / 2) / PIXEL_SIZE)
+            # set all pixels within the radius to occupied by pad
+            for dy in range(-radius_in_pixels, radius_in_pixels + 1):
+                for dx in range(-radius_in_pixels, radius_in_pixels + 1):
+                    if dx**2 + dy**2 <= radius_in_pixels**2:
+                        px = pixel_x + dx
+                        py = pixel_y + dy
+                        if px < 0 or px >= len(layers[0]) or py < 0 or py >= len(layers):
+                            continue
+                        pixel = layers[py][px]
+                        for layer in layers_of_pad:
+                            pixel.setLayerOccupancy(layer, "pad")
+        
+        elif shape_type == "polygon":
+            # find the bounding box of the polygon
+            xs = [vertex[0] + pos[0] for vertex in shape]
+            ys = [vertex[1] + pos[1] for vertex in shape]
+            min_x = min(xs)
+            max_x = max(xs)
+            min_y = min(ys)
+            max_y = max(ys)
+
+            min_pixel_x = int(min_x / PIXEL_SIZE)
+            max_pixel_x = int(max_x / PIXEL_SIZE)
+            min_pixel_y = int(-max_y / PIXEL_SIZE)
+            max_pixel_y = int(-min_y / PIXEL_SIZE)
+
+            # for each pixel in the bounding box, check if it's inside the polygon
+            for py in range(min_pixel_y, max_pixel_y + 1):
+                for px in range(min_pixel_x, max_pixel_x + 1):
+                    # convert pixel center to world coordinates
+                    world_x = px * PIXEL_SIZE + PIXEL_SIZE / 2
+                    world_y = - (py * PIXEL_SIZE + PIXEL_SIZE / 2)
+
+                    # use ray-casting algorithm to check if point is inside polygon
+                    inside = False
+                    n = len(shape)
+                    for i in range(n):
+                        v1 = (shape[i][0] + pos[0], shape[i][1] + pos[1])
+                        v2 = (shape[(i + 1) % n][0] + pos[0], shape[(i + 1) % n][1] + pos[1])
+                        if ((v1[1] > world_y) != (v2[1] > world_y)) and \
+                           (world_x < (v2[0] - v1[0]) * (world_y - v1[1]) / (v2[1] - v1[1]) + v1[0]):
+                            inside = not inside
+
+                    if inside:
+                        if px < 0 or px >= len(layers[0]) or py < 0 or py >= len(layers):
+                            continue
+                        pixel = layers[py][px]
+                        for layer in layers_of_pad:
+                            pixel.setLayerOccupancy(layer, "pad")
+
+            
+        #print(pos, shape, shape_type, layers_of_pad) 
+    
+    for wire in wires:
+        if isinstance(wire, Wire):
+            segments = wire.getSegments()
+            for segment in segments:
+                p1 = segment[0]
+                p2 = segment[1]
+                layer = segment[2]
+                width = segment[3]
+
+                # Bresenham's line algorithm to find pixels along the line
+                x1 = int(p1[0] / PIXEL_SIZE)
+                y1 = int(-p1[1] / PIXEL_SIZE)
+                x2 = int(p2[0] / PIXEL_SIZE)
+                y2 = int(-p2[1] / PIXEL_SIZE)
+
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                sx = 1 if x1 < x2 else -1
+                sy = 1 if y1 < y2 else -1
+                err = dx - dy
+                half_width = int(width / (2 * PIXEL_SIZE))
+
+                # Store all pixels along the centerline first
+                centerline_pixels = []
+                x_temp, y_temp, err_temp = x1, y1, err
+                while True:
+                    centerline_pixels.append((x_temp, y_temp))
+                    if x_temp == x2 and y_temp == y2:
+                        break
+                    err2 = err_temp * 2
+                    if err2 > -dy:
+                        err_temp -= dy
+                        x_temp += sx
+                    if err2 < dx:
+                        err_temp += dx
+                        y_temp += sy
+                
+                # Now mark all pixels within half_width of the centerline
+                for cx, cy in centerline_pixels:
+                    # Mark the centerline pixel
+                    if 0 <= cx < len(layers[0]) and 0 <= cy < len(layers):
+                        pixel = layers[cy][cx]
+                        pixel.setLayerOccupancy(layer, "trace")
+                    
+                    # Mark pixels in a square band around the centerline
+                    for dx_off in range(-half_width, half_width + 1):
+                        for dy_off in range(-half_width, half_width + 1):
+                            px = cx + dx_off
+                            py = cy + dy_off
+                            if 0 <= px < len(layers[0]) and 0 <= py < len(layers):
+                                pixel = layers[py][px]
+                                pixel.setLayerOccupancy(layer, "trace")
+
+
+def displayGrid():
+    pixel_maps = [] # each layer gets its own pixel map which is a 2D array
+
+    for layer in range(layers_needed):
+        img = np.zeros((int(board_height * 10), int(board_width * 10))).astype(np.uint8)
+
+        # for each pixel, if this layer is occupied by a pad, set the pixel to white
+        for y in range(len(layers)):
+            for x in range(len(layers[0])):
+                pixel = layers[y][x]
+                occupancy = pixel.getOccupancy()[layer]
+                if "pad" in occupancy:
+                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 255
+                if "trace" in occupancy:
+                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 128
+
+        pixel_maps.append(img)
+
+    # plot each pixel map on the same figure
+    for i in range(len(pixel_maps)):
+        img = pixel_maps[i]
+        plt.figure()
+        plt.title(f"Layer {i + 1}")
+        plt.imshow(img)
+        plt.axis('off')
+
+    plt.show()
+
+
+def routePads(pad_1, pad_2):
+    '''
+    Route a trace between two pads using a simple straight line for now.
+    Later we can implement A* or other pathfinding algorithms to avoid obstacles.
+    '''
+    pos1 = pad_1.getPosition()
+    pos2 = pad_2.getPosition()
+
+    print(f"Routing trace between pad {pad_1.getID()} at {pos1} and pad {pad_2.getID()} at {pos2}")
+
+    # for now just draw a straight line
+    net = pad_1.getNet()
+    wire = Wire(net, [[pos1, pos2, 1, 1]])
+    wires.append(wire)
+
 
 if __name__ == "__main__":
     processDSNfile("DSN/mosfetDriver.dsn")
@@ -836,6 +1079,16 @@ if __name__ == "__main__":
     double_click_threshold = 300  # milliseconds
     static_bodies = []
 
+    # determine how many layers are needed
+    layers_needed = 2
+    for pad in pads:
+        if max(pad.getLayers()) > layers_needed:
+            layers_needed = max(pad.getLayers())
+    
+    PIXEL_SIZE = 1 # can go down to 0.1
+    board_width = 0
+    board_height = 0
+
     bodies, shapes, traces, component_to_body, pad_to_spring = addPhysicsObjects(space)
 
     # mouse drag state for left-click dragging
@@ -846,6 +1099,8 @@ if __name__ == "__main__":
     # kinematic body that follows the mouse for dragging
     mouse_body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
     space.add(mouse_body)
+
+    counter = 0
 
     while running:
         for event in pg.event.get():
@@ -993,9 +1248,26 @@ if __name__ == "__main__":
                 p22 = (p22) * zoom + dy
                 p1 = Vec2d(p11, p12)
                 p2 = Vec2d(p21, p22)
-                pg.draw.line(screen, (255, 255, 255), to_pygame(p1, screen), to_pygame(p2, screen), 2)
-   
+                pg.draw.line(screen, (255, 255, 255), to_pygame(p1, screen), to_pygame(p2, screen), 2)   
 
         pg.display.flip()
         dt = clock.tick(fps)
         total_time += dt / 1000.0
+        counter += 1
+
+
+    # after closing the pygame window, display the pixel occupancy grid
+    populatePixels()
+    updatePixelOccupancy()
+    #displayGrid()
+
+    # find two pads to route between for testing
+    routePads(pads[0], pads[1])
+    routePads(pads[2], pads[3])
+
+    print(f"wires: {wires}")
+    for wire in wires:
+        print("Trace segments:", wire.getSegments())
+
+    updatePixelOccupancy()
+    displayGrid()
