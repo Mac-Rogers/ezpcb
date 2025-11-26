@@ -1044,6 +1044,71 @@ def routePads(pad_1, pad_2):
     wires.append(wire)
 
 
+def orderWires():
+    '''
+    create a list showing how all the pads connect together (don't care about what net) and ordered based on length
+    [(pad1, pad2), (pad3, pad4), ...]
+    Where the distance between pad1 and pad2 is less than the distance between pad3 and pad4, etc.
+    '''
+    pad_pairs = []
+    seen_pairs = set()
+    for net in nets:
+        points = net.getPoints() # points are [x,y] positions of pads and vias
+
+        # find the closest pair of points for each point
+        for point in points:
+            dist = float('inf')
+            closest_point = None
+            for other_point in points:
+                if point == other_point:
+                    continue
+                d = np.sqrt((point[0] - other_point[0])**2 + (point[1] - other_point[1])**2)
+                if d < dist:
+                    dist = d
+                    closest_point = other_point
+            if closest_point is not None:
+                # find the pads that correspond to the two points
+                pad1 = next((pad for pad in pads if pad.getPosition() == point), None)
+                pad2 = next((pad for pad in pads if pad.getPosition() == closest_point), None)
+                if pad1 is None or pad2 is None:
+                    continue
+
+                # canonicalize pair order by pad ID to avoid duplicates (pad1,pad2) and (pad2,pad1)
+                id1 = pad1.getID()
+                id2 = pad2.getID()
+                if id1 == id2:
+                    continue
+                pair_key = (min(id1, id2), max(id1, id2))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
+                # append pads in canonical order (lower id first)
+                if id1 <= id2:
+                    pad_pairs.append((pad1, pad2, dist))
+                else:
+                    pad_pairs.append((pad2, pad1, dist))
+    # sort pad pairs based on distance
+    pad_pairs.sort(key=lambda x: x[2])
+    print(pad_pairs)
+
+    return pad_pairs
+
+
+def next_trace_to_route(pad_pairs, skip=False):
+
+    if len(pad_pairs) == 0:
+        return None, None
+    
+    if not skip:
+        pad1, pad2, dist = pad_pairs.pop(0)
+    else:
+        # rotate the list
+        pad_pairs.append(pad_pairs.pop(0))
+        pad1, pad2, dist = pad_pairs[0]
+    return pad1, pad2
+        
+
 if __name__ == "__main__":
     processDSNfile("DSN/mosfetDriver.dsn")
 
@@ -1100,25 +1165,34 @@ if __name__ == "__main__":
     mouse_body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
     space.add(mouse_body)
 
-    counter = 0
+    placement_done = False
+    waypoint_place = False
+    waypoints = [] # list of (x, y, layer) tuples for waypoints
+    pad_pairs = []
+    pad1, pad2 = None, None
+    current_layer = 1
+
+    print("Press 'f' to finish placement and start routing.")
 
     while running:
-        for event in pg.event.get():
+        for event in pg.event.get():           
             if event.type == pg.QUIT:
                 running = False
 
             elif event.type == pg.MOUSEBUTTONDOWN:
+
+                mouse_x, mouse_y = event.pos
+                # convert to world coords used by bodies
+                world_x = (mouse_x - dx) / zoom
+                world_y = (mouse_y - dy) / zoom
+
                 if event.button == 3:  # Right mouse button (pan)
                     is_dragging = True
                     offset_x = event.pos[0] - dx
                     offset_y = event.pos[1] - dy
 
-                elif event.button == 1:  # Left mouse button (select/drag or double-click)
+                elif event.button == 1 and not placement_done:  # Left mouse button (select/drag or double-click)
                     current_time = pg.time.get_ticks()
-                    mouse_x, mouse_y = event.pos
-                    # convert to world coords used by bodies
-                    world_x = (mouse_x - dx) / zoom
-                    world_y = (mouse_y - dy) / zoom
 
                     if current_time - last_click_time < double_click_threshold:
                         # Double click detected -> toggle fixed state
@@ -1155,6 +1229,10 @@ if __name__ == "__main__":
                             space.add(grab_joint)
 
                     last_click_time = current_time
+
+                if event.button == 1 and placement_done and waypoint_place:
+                    waypoints.append((world_x, world_y, current_layer))
+                    print(waypoints)
 
             elif event.type == pg.MOUSEBUTTONUP:
                 if event.button == 3:
@@ -1204,28 +1282,65 @@ if __name__ == "__main__":
                 # Adjust offset to keep world position under mouse
                 dx -= (world_x_after - world_x_before) * zoom
                 dy -= (world_y_after - world_y_before) * zoom
+            
+            elif event.type == pg.KEYDOWN:
+                if event.key == pg.K_f:
+                    placement_done = True
+                    pad_pairs = orderWires()
+                    pad1, pad2 = next_trace_to_route(pad_pairs, False)
+
+                    populatePixels()
+                    updatePixelOccupancy()
+
+                    print("Press 'w' to toggle waypoint placement mode.")
+                    print("Press 'escape' to exit waypoint placement mode.")
+                    print("Press 'n' to move to the next trace to route.")
+                if event.key == pg.K_w:
+                    waypoint_place = not waypoint_place
+                if event.key == pg.K_ESCAPE:
+                    waypoint_place = False
+                if event.key == pg.K_n and placement_done:
+                    pad1, pad2 = next_trace_to_route(pad_pairs, True)
+                    waypoints = []
+                if event.key == pg.K_z and (pg.key.get_mods() & pg.KMOD_CTRL):
+                    if len(waypoints) > 0:
+                        waypoints.pop()
+                # select current layer for waypoints
+                if event.key == pg.K_t:
+                    current_layer = 1
+                if event.key == pg.K_b:
+                    current_layer = 2
+                if event.key == pg.K_r:
+                    # route the current pads
+                    routePads(pad1, pad2)
+
+                    updatePixelOccupancy()
+                    displayGrid()
+                
 
 
         draw_options.transform = pymunk.Transform.scaling(zoom).translated(dx / zoom, dy / zoom)
 
-        space.step(1.0 / fps)
+        if not placement_done:
+            space.step(1.0 / fps)
 
+        # freeze static bodies in place
         for body in static_bodies:
             if disable_body_while_dragging == body:
                 continue
-
             body.mass = 1000000
             body.moment = 1000000
             body.velocity = (0.0, 0.0)
             body.angular_velocity = 0.0
             body.force = (0.0, 0.0)
             body.torque = 0.0
-
+            # snap rotation to nearest 90 degrees
             angle = body.angle
             nearest_90 = round(angle / (math.pi / 2)) * (math.pi / 2)
             body.angle = nearest_90
         
-
+        
+        # update component positions based on physics bodies
         for body in bodies:
             # find the component that corresponds to this body
             comp = next((c for c in components if component_to_body.get(c.getID()) == body), None)
@@ -1237,23 +1352,69 @@ if __name__ == "__main__":
         space.debug_draw(draw_options)
 
         drawPygameComponents()
-     
-        for c in space.constraints:
-            if isinstance(c, pymunk.DampedSpring):
-                p11, p12 = c.a.local_to_world(c.anchor_a)
-                p21, p22 = c.b.local_to_world(c.anchor_b)
-                p11 = (p11) * zoom + dx
-                p12 = (p12) * zoom + dy
-                p21 = (p21) * zoom + dx
-                p22 = (p22) * zoom + dy
-                p1 = Vec2d(p11, p12)
-                p2 = Vec2d(p21, p22)
-                pg.draw.line(screen, (255, 255, 255), to_pygame(p1, screen), to_pygame(p2, screen), 2)   
+
+
+        # choose which trace is about to be routed
+        if placement_done:
+            # draw all ratlines in grey
+            for pair in pad_pairs:
+                p1, p2, dist = pair
+                pos1 = p1.getPosition()
+                pos2 = p2.getPosition()
+                x1 = int(pos1[0] * zoom + dx)
+                y1 = int(-pos1[1] * zoom + dy)
+                x2 = int(pos2[0] * zoom + dx)
+                y2 = int(-pos2[1] * zoom + dy)
+                pg.draw.line(screen, "grey", (x1, y1), (x2, y2), 2)
+
+            # draw a line between pad1 and pad2
+            if pad1 is not None and pad2 is not None:
+                pos1 = pad1.getPosition()
+                pos2 = pad2.getPosition()
+                x1 = int(pos1[0] * zoom + dx)
+                y1 = int(-pos1[1] * zoom + dy)
+                x2 = int(pos2[0] * zoom + dx)
+                y2 = int(-pos2[1] * zoom + dy)
+                pg.draw.line(screen, "green", (x1, y1), (x2, y2), 3)
+            
+            # render green circle at mouse position
+            if waypoint_place:
+                if current_layer == 1:
+                    colour = "red"
+                elif current_layer == 2:
+                    colour = "blue"
+                else:
+                    colour = "yellow"
+                pg.draw.circle(screen, colour, (mouse_x, mouse_y), 5, 0)
+
+            for waypoint in waypoints:
+                wx = int(waypoint[0] * zoom + dx)
+                wy = int(waypoint[1] * zoom + dy)
+                layer = waypoint[2]
+                if layer == 1:
+                    colour = "red"
+                elif layer == 2:
+                    colour = "blue"
+                pg.draw.circle(screen, colour, (wx, wy), 5, 0)
+
+        else:
+            # draw springs as white lines
+            for c in space.constraints:
+                if isinstance(c, pymunk.DampedSpring):
+                    p11, p12 = c.a.local_to_world(c.anchor_a)
+                    p21, p22 = c.b.local_to_world(c.anchor_b)
+                    p11 = (p11) * zoom + dx
+                    p12 = (p12) * zoom + dy
+                    p21 = (p21) * zoom + dx
+                    p22 = (p22) * zoom + dy
+                    p1 = Vec2d(p11, p12)
+                    p2 = Vec2d(p21, p22)
+                    pg.draw.line(screen, (255, 255, 255), to_pygame(p1, screen), to_pygame(p2, screen), 2)
+       
 
         pg.display.flip()
         dt = clock.tick(fps)
         total_time += dt / 1000.0
-        counter += 1
 
 
     # after closing the pygame window, display the pixel occupancy grid
@@ -1270,4 +1431,4 @@ if __name__ == "__main__":
         print("Trace segments:", wire.getSegments())
 
     updatePixelOccupancy()
-    displayGrid()
+    #displayGrid()
