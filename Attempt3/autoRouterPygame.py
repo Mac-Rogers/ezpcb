@@ -8,6 +8,7 @@ from pymunk import Vec2d, SpaceDebugDrawOptions as SDO
 from pymunk.space_debug_draw_options import SpaceDebugColor
 import matplotlib.pyplot as plt
 import cv2
+from scipy.ndimage import binary_dilation
 
 
 '''
@@ -820,6 +821,11 @@ class Pixel:
         self.data = []
         for i in range(layers_needed):
             self.data.append(None)
+        
+        # associate the pixel with its object
+        self.net = None
+        self.pad = None
+        self.wire = None
     
     def setLayerOccupancy(self, layer, occupancy_state):
         self.data[layer - 1] = occupancy_state
@@ -903,6 +909,8 @@ def updatePixelOccupancy():
                         pixel = layers[py][px]
                         for layer in layers_of_pad:
                             pixel.setLayerOccupancy(layer, "pad")
+                            pixel.net = pad.getNet()
+                            pixel.pad = pad
         
         elif shape_type == "polygon":
             # find the bounding box of the polygon
@@ -941,6 +949,8 @@ def updatePixelOccupancy():
                         pixel = layers[py][px]
                         for layer in layers_of_pad:
                             pixel.setLayerOccupancy(layer, "pad")
+                            pixel.net = pad.getNet()
+                            pixel.pad = pad
 
             
         #print(pos, shape, shape_type, layers_of_pad) 
@@ -988,6 +998,8 @@ def updatePixelOccupancy():
                     if 0 <= cx < len(layers[0]) and 0 <= cy < len(layers):
                         pixel = layers[cy][cx]
                         pixel.setLayerOccupancy(layer, "trace")
+                        pixel.net = wire.getNet()
+                        pixel.wire = wire
                     
                     # Mark pixels in a square band around the centerline
                     for dx_off in range(-half_width, half_width + 1):
@@ -997,6 +1009,8 @@ def updatePixelOccupancy():
                             if 0 <= px < len(layers[0]) and 0 <= py < len(layers):
                                 pixel = layers[py][px]
                                 pixel.setLayerOccupancy(layer, "trace")
+                                pixel.net = wire.getNet()
+                                pixel.wire = wire
 
 
 def displayGrid():
@@ -1017,7 +1031,7 @@ def displayGrid():
 
         pixel_maps.append(img)
 
-    # plot each pixel map on the same figure
+    # plot each pixel map
     for i in range(len(pixel_maps)):
         img = pixel_maps[i]
         plt.figure()
@@ -1027,6 +1041,20 @@ def displayGrid():
 
     plt.show()
 
+
+def addClearance(img):
+    """Return a copy of img where the -1 region has been expanded by 1 pixel
+    in all 8 directions.  If expansion overlaps 1s, they are overwritten by -1.
+    """
+    img = img.copy()
+    neg = (img == -1)
+
+    # 3x3 structuring element -> expand by 1 pixel in all directions
+    struct = np.ones((5,5), dtype=bool)
+    dilated = binary_dilation(neg, structure=struct)
+
+    img[dilated] = -1
+    return img
 
 def routePads(pad_1, pad_2):
     '''
@@ -1040,8 +1068,65 @@ def routePads(pad_1, pad_2):
 
     # for now just draw a straight line
     net = pad_1.getNet()
-    wire = Wire(net, [[pos1, pos2, 1, 1]])
-    wires.append(wire)
+    #wire = Wire(net, [[pos1, pos2, 1, 1]])
+    #wires.append(wire)
+
+    # 1st, construct the pixel map where 0 means you can't route there.
+    pixel_maps = [] # each layer gets its own pixel map which is a 2D array
+
+    # check if the first waypoint is closer to pad1 or pad2
+    if waypoints:
+        dx1 = pad_1.getPosition()[0] - waypoints[0][0]
+        dy1 = pad_1.getPosition()[1] - waypoints[0][1]
+        dist1 = np.sqrt(dx1**2 + dy1**2)
+        dx2 = pad_2.getPosition()[0] - waypoints[0][0]
+        dy2 = pad_2.getPosition()[1] - waypoints[0][1]
+        dist2 = np.sqrt(dx2**2 + dy2**2)
+
+        if dist2 < dist1:
+            # the distance from pad_2 to the first waypoint is closer than the distance from pad_1 to the first waypoint
+            waypoints.reverse()
+    
+    # add pad_2 as a waypoint so we can iterate through each waypoint.
+    waypoints.append((pad_2.getPosition()[0], -pad_2.getPosition()[1], pad_2.getLayers()[0]))
+    print(waypoints)
+
+    for layer in range(layers_needed):
+        img = np.zeros((int(board_height * 10), int(board_width * 10)))
+
+        # for each pixel, if this layer is occupied by a pad which is not pad_1 or pad_2, set the pixel to 0
+        for y in range(len(layers)):
+            for x in range(len(layers[0])):
+                pixel = layers[y][x]
+                occupancy = pixel.getOccupancy()[layer]
+                
+                # not allowed to route over currently occupied pixels except if the pixel is in the pad or wire in the net
+                if ("pad" in occupancy and pixel.pad not in [pad_1, pad_2]) or ("trace" in occupancy and pixel.wire.net != net):
+                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = -1
+                # otherwise it can route there
+                elif "pad" in occupancy and pixel.pad in [pad_1, pad_2]:
+                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 1
+                
+                for waypoint in waypoints:
+                    if x == int(waypoint[0]) and y == int(waypoint[1]) and layer + 1 == waypoint[2]:
+                        img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 2
+                        
+
+        # binary morphological dilation to add clearance around other non-routable pixels
+        img = addClearance(img)
+
+        pixel_maps.append(img)
+    
+    # plot each pixel map
+    for i in range(len(pixel_maps)):
+        img = pixel_maps[i]
+        plt.figure()
+        plt.title(f"Layer {i + 1}")
+        plt.imshow(img)
+        plt.axis('off')
+
+    plt.show()
+
 
 
 def orderWires():
@@ -1315,7 +1400,7 @@ if __name__ == "__main__":
                     routePads(pad1, pad2)
 
                     updatePixelOccupancy()
-                    displayGrid()
+                    #displayGrid()
                 
 
 
@@ -1417,18 +1502,18 @@ if __name__ == "__main__":
         total_time += dt / 1000.0
 
 
-    # after closing the pygame window, display the pixel occupancy grid
-    populatePixels()
-    updatePixelOccupancy()
-    #displayGrid()
+    # # after closing the pygame window, display the pixel occupancy grid
+    # populatePixels()
+    # updatePixelOccupancy()
+    # #displayGrid()
 
-    # find two pads to route between for testing
-    routePads(pads[0], pads[1])
-    routePads(pads[2], pads[3])
+    # # find two pads to route between for testing
+    # routePads(pads[0], pads[1])
+    # routePads(pads[2], pads[3])
 
-    print(f"wires: {wires}")
-    for wire in wires:
-        print("Trace segments:", wire.getSegments())
+    # print(f"wires: {wires}")
+    # for wire in wires:
+    #     print("Trace segments:", wire.getSegments())
 
-    updatePixelOccupancy()
-    #displayGrid()
+    # updatePixelOccupancy()
+    # #displayGrid()
