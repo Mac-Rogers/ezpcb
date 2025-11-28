@@ -290,6 +290,10 @@ class Wire:
     def __init__(self, net, segments):
         self.net = net  # net object
         self.segments = segments  # list of segments, each segment is [[x1,y1],[x2,y2], layer, width]
+        # one wire is typically used per pad-pad connection
+        # store these two pads for convenience
+        self.pad_1 = None
+        self.pad_2 = None
     
     def getNet(self):
         return self.net
@@ -958,6 +962,7 @@ def updatePixelOccupancy():
     for wire in wires:
         if isinstance(wire, Wire):
             segments = wire.getSegments()
+            print(f"Processing wire with {segments}")
             for segment in segments:
                 p1 = segment[0]
                 p2 = segment[1]
@@ -1017,7 +1022,7 @@ def displayGrid():
     pixel_maps = [] # each layer gets its own pixel map which is a 2D array
 
     for layer in range(layers_needed):
-        img = np.zeros((int(board_height * 10), int(board_width * 10))).astype(np.uint8)
+        img = np.zeros((int(board_height), int(board_width))).astype(np.uint8)
 
         # for each pixel, if this layer is occupied by a pad, set the pixel to white
         for y in range(len(layers)):
@@ -1025,9 +1030,9 @@ def displayGrid():
                 pixel = layers[y][x]
                 occupancy = pixel.getOccupancy()[layer]
                 if "pad" in occupancy:
-                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 255
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = 255
                 if "trace" in occupancy:
-                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 128
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = 128
 
         pixel_maps.append(img)
 
@@ -1050,11 +1055,148 @@ def addClearance(img):
     neg = (img == -1)
 
     # 3x3 structuring element -> expand by 1 pixel in all directions
-    struct = np.ones((5,5), dtype=bool)
+    struct = np.ones((3,3), dtype=bool)
     dilated = binary_dilation(neg, structure=struct)
 
     img[dilated] = -1
     return img
+
+def retracePath(pixel_map, goal):
+    '''
+    goal: (x, y, layer)
+    retrace the path from goal to start by following the lowest cost neighbour to 1
+    '''
+    x = goal[0]
+    y = goal[1]
+    layer = goal[2]
+
+    path = []
+    path.append((x, y, layer))
+    while pixel_map[layer][y][x] != 1:
+        # neighbours =   [(x-1, y-1), (x, y-1), (x+1, y-1),
+        #                 (x-1, y),             (x+1, y),
+        #                 (x-1, y+1), (x, y+1), (x+1, y+1)]
+        neighbours =   [(x, y-1), (x-1, y), (x+1, y), (x, y+1),         # up down left right                  
+                        (x-1, y-1), (x+1, y-1), (x-1, y+1), (x+1, y+1)] # diagonals
+        
+        min_cost = float('inf')
+        next_pixel = None
+
+        for neighbour in neighbours:
+            nx = neighbour[0]
+            ny = neighbour[1]
+
+            # check if neighbour is within bounds
+            if nx < 0 or nx >= len(pixel_map[0][0]) or ny < 0 or ny >= len(pixel_map[0]):
+                continue
+
+            cost = pixel_map[layer][ny][nx]
+            if cost > 0 and cost < min_cost:
+                min_cost = cost
+                next_pixel = (nx, ny)
+        
+        if next_pixel is None:
+            print("No path found during retrace.")
+            return path
+        
+        x = next_pixel[0]
+        y = next_pixel[1]
+        path.append((x, y, layer))
+    
+    # remove intermediate points to only keep waypoints where direction changes
+    simplified_path = []
+    simplified_path.append(path[0])
+    for i in range(1, len(path) - 1):
+        p_prev = path[i - 1]
+        p_curr = path[i]
+        p_next = path[i + 1]
+
+        dir1 = (p_curr[0] - p_prev[0], p_curr[1] - p_prev[1])
+        dir2 = (p_next[0] - p_curr[0], p_next[1] - p_curr[1])
+
+        if dir1 != dir2:
+            simplified_path.append(p_curr)
+    simplified_path.append(path[-1])
+
+    return simplified_path
+
+def Astar(goal_layer, pixel_map):
+    '''
+    start: (x, y, layer)
+    goal: (x, y, layer)
+    pixel_map: [[layer1_pixels], [layer2_pixels], ...] where each layer_pixels is a 2D array
+        a 0 means you can route there, a -1 means you can't route there a 1 means it's in the same net and can be routed freely, -2 means it's a waypoint
+    return: pixel_map with the path marked
+    '''
+
+    '''
+    atm, it sticks to the layer of what the goal is on.
+    '''
+
+    # for each pixel:
+    #   go through every pixel and find the 1s
+    #   add 1s loctions to "search_space" list
+    # for each pixel in search_space:
+    #   find 8 neighbours
+    #   if neighbour value is 0, increment cost by 1
+    #   add to "next_search_space" list
+    # search_space = next_search_space
+    # clear next_search_space
+    # repeat until goal is found or search_space is empty
+
+    search_space = []
+    next_search_space = []
+    goal_layer -= 1
+
+    # add all 1s to search_space (vectorized using numpy where/argwhere)
+    for layer_idx, layer_arr in enumerate(pixel_map):
+        # Use numpy to find indices of ones. argwhere returns rows as (y, x).
+        ones = np.argwhere(layer_arr == 1)
+        if ones.size:
+            # convert to (x,y,layer) tuples and extend the search_space list
+            search_space.extend([(int(x), int(y), layer_idx) for y, x in ones.tolist()])
+    
+    for i in range(1000):
+        print(f"Iteration {i}, search space size: {len(search_space)}")
+        for pixel in search_space:
+            x = pixel[0]
+            y = pixel[1]
+            layer = pixel[2]
+
+            # find 8 neighbours
+            # neighbours =   [(x-1, y-1, layer), (x, y-1, layer), (x+1, y-1, layer),
+            #                 (x-1, y,   layer),                  (x+1, y,   layer),
+            #                 (x-1, y+1, layer), (x, y+1, layer), (x+1, y+1, layer)]
+            neighbours =   [(x-1, y-1, goal_layer), (x, y-1, goal_layer), (x+1, y-1, goal_layer),
+                            (x-1, y,   goal_layer),                       (x+1, y,   goal_layer),
+                            (x-1, y+1, goal_layer), (x, y+1, goal_layer), (x+1, y+1, goal_layer)]
+
+            for neighbour in neighbours:
+                nx = neighbour[0]
+                ny = neighbour[1]
+                nlayer = neighbour[2]
+
+                # check if neighbour is within bounds
+                if nx < 0 or nx >= len(pixel_map[0][0]) or ny < 0 or ny >= len(pixel_map[0]):
+                    continue
+
+                # if neighbour value is 0, increment cost by 1
+                if pixel_map[nlayer][ny][nx] == 0:
+                    pixel_map[nlayer][ny][nx] = pixel_map[layer][y][x] + 1
+                    next_search_space.append((nx, ny, nlayer))
+                elif pixel_map[nlayer][ny][nx] == -2:
+                    # reached goal
+                    print("Goal reached!")
+                    path = retracePath(pixel_map, (nx, ny, nlayer))
+                    print("Path:", path)
+                    return path
+        search_space = next_search_space
+        next_search_space = []
+    
+    print("Goal not reached after 1000 iterations.")
+    return None
+    
+
 
 def routePads(pad_1, pad_2):
     '''
@@ -1065,11 +1207,9 @@ def routePads(pad_1, pad_2):
     pos2 = pad_2.getPosition()
 
     print(f"Routing trace between pad {pad_1.getID()} at {pos1} and pad {pad_2.getID()} at {pos2}")
+    print(f"pad_1 pos: {pad_1.getPosition()}, layers: {pad_1.getLayers()}")
 
-    # for now just draw a straight line
     net = pad_1.getNet()
-    #wire = Wire(net, [[pos1, pos2, 1, 1]])
-    #wires.append(wire)
 
     # 1st, construct the pixel map where 0 means you can't route there.
     pixel_maps = [] # each layer gets its own pixel map which is a 2D array
@@ -1092,7 +1232,7 @@ def routePads(pad_1, pad_2):
     print(waypoints)
 
     for layer in range(layers_needed):
-        img = np.zeros((int(board_height * 10), int(board_width * 10)))
+        img = np.zeros((int(board_height), int(board_width)))
 
         # for each pixel, if this layer is occupied by a pad which is not pad_1 or pad_2, set the pixel to 0
         for y in range(len(layers)):
@@ -1101,17 +1241,28 @@ def routePads(pad_1, pad_2):
                 occupancy = pixel.getOccupancy()[layer]
                 
                 # not allowed to route over currently occupied pixels except if the pixel is in the pad or wire in the net
-                if ("pad" in occupancy and pixel.pad not in [pad_1, pad_2]) or ("trace" in occupancy and pixel.wire.net != net):
-                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = -1
-                # otherwise it can route there
-                elif "pad" in occupancy and pixel.pad in [pad_1, pad_2]:
-                    img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 1
+                if ("pad" in occupancy and pixel.pad != pad_1) or ("trace" in occupancy and pixel.wire.net != net):
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = -1
+
+                # can start from pad_1 or from a wire whose endpoint is pad_1
+                # can end at pad_2 or at a wire whose endpoint is pad_2
+                # can route over traces in the same net
+
+                #elif ("pad" in occupancy and pixel.pad == pad_1): # or ("trace" in occupancy and pixel.wire.net == net):
+                elif ("pad" in occupancy and pixel.pad == pad_1):# or ("trace" in occupancy and pixel.wire.net == net):
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = 1
+                elif "trace" in occupancy and (pad_1 == pixel.wire.pad_1 or pad_1 == pixel.wire.pad_2):
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = 1
                 
                 for waypoint in waypoints:
                     if x == int(waypoint[0]) and y == int(waypoint[1]) and layer + 1 == waypoint[2]:
-                        img[int(y * PIXEL_SIZE * 10):int((y + 1) * PIXEL_SIZE * 10), int(x * PIXEL_SIZE * 10):int((x + 1) * PIXEL_SIZE * 10)] = 2
+                        img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = -2
+                # end pad (pad_2) treated as a waypoint
+                if "pad" in occupancy and pixel.pad == pad_2:
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = -2
+                elif "trace" in occupancy and (pad_2 == pixel.wire.pad_1 or pad_2 == pixel.wire.pad_2):
+                    img[int(y * PIXEL_SIZE):int((y + 1) * PIXEL_SIZE), int(x * PIXEL_SIZE):int((x + 1) * PIXEL_SIZE)] = -2
                         
-
         # binary morphological dilation to add clearance around other non-routable pixels
         img = addClearance(img)
 
@@ -1124,8 +1275,27 @@ def routePads(pad_1, pad_2):
         plt.title(f"Layer {i + 1}")
         plt.imshow(img)
         plt.axis('off')
-
     plt.show()
+
+    path = Astar(waypoints[0][2], pixel_maps)
+    # create a Wire object from the path
+    if path is not None:
+        segments = []
+        for i in range(len(path) - 1):
+            p1 = (path[i][0] / PIXEL_SIZE, -path[i][1] / PIXEL_SIZE)
+            p2 = (path[i + 1][0] / PIXEL_SIZE, -path[i + 1][1] / PIXEL_SIZE)
+            layer = path[i][2] + 1
+            width = 1
+            segments.append((p1, p2, layer, width))
+        print(segments)
+        
+        wire = Wire(net, segments)
+        wire.pad_1 = pad_1
+        wire.pad_2 = pad_2
+        wires.append(wire)
+        updatePixelOccupancy()
+    
+    displayGrid()
 
 
 
@@ -1399,7 +1569,7 @@ if __name__ == "__main__":
                     # route the current pads
                     routePads(pad1, pad2)
 
-                    updatePixelOccupancy()
+                    #updatePixelOccupancy()
                     #displayGrid()
                 
 
@@ -1501,19 +1671,3 @@ if __name__ == "__main__":
         dt = clock.tick(fps)
         total_time += dt / 1000.0
 
-
-    # # after closing the pygame window, display the pixel occupancy grid
-    # populatePixels()
-    # updatePixelOccupancy()
-    # #displayGrid()
-
-    # # find two pads to route between for testing
-    # routePads(pads[0], pads[1])
-    # routePads(pads[2], pads[3])
-
-    # print(f"wires: {wires}")
-    # for wire in wires:
-    #     print("Trace segments:", wire.getSegments())
-
-    # updatePixelOccupancy()
-    # #displayGrid()
