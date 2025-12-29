@@ -12,10 +12,10 @@ from scipy.ndimage import binary_dilation
 
 '''
 TODO:
+- first instance spring not generating correctly
+- generate SES
+- 2nd layer through vias
 - bottom layer component selective collisions
-- dynamically adjust ratlines for minimum link length
-- count spring crossings
-- optimise for minimum crossings?
 '''
 
 '''
@@ -611,6 +611,11 @@ def printStructure():
         print(f"  Net {net.getName()}:")
         for pad in net.getPads():
             print(f"    Pad {pad.getID()}: {pad.getPosition()}, on layers {pad.getLayers()}, in net {pad.getNet()}")
+
+
+def constructSESfile(file_name):
+    # oh dear
+    pass
 
 
 class CustomDrawOptions(pymunk.pygame_util.DrawOptions):
@@ -1592,7 +1597,7 @@ if __name__ == "__main__":
                 if event.key == pg.K_f:
                     placement_done = True
                     pad_pairs = orderWires()
-                    pad1, pad2 = next_trace_to_route(pad_pairs, False)
+                    pad1, pad2 = next_trace_to_route(pad_pairs, True)
 
                     populatePixels()
                     updatePixelOccupancy()
@@ -1627,13 +1632,6 @@ if __name__ == "__main__":
                     if routePads(pad1, pad2):
                         # remove from pad pairs
                         pad_pairs.pop(0)
-                    # for i in range(len(pad_pairs)):
-                    #     pad1, pad2 = next_trace_to_route(pad_pairs, True)
-                    #     waypoints = []
-                    #     if routePads(pad1, pad2):
-                    #         # remove from pad pairs
-                    #         pad_pairs.pop(0)
-                    #     drawTraces()
                 
 
 
